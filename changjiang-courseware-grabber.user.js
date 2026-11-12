@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         长江雨课堂 课件抓取助手
 // @namespace    https://github.com/qzhengpyuan/changjiang-course-grabber
-// @version      2.3.1
+// @version      2.3.2
 // @icon         https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-64.png
 // @icon64       https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-128.png
 // @homepageURL  https://github.com/qzhengpyuan/changjiang-course-grabber
@@ -11,6 +11,10 @@
 // @license      MIT
 // @description  抓取长江雨课堂课程的 PPT 课件（合并 PDF / 图片版 PPTX / 图片 ZIP）与视频直链，支持整门课批量。基于「学习通 PDF 抓取助手」的工具栏、进度面板与 STORE ZIP 框架改写。
 // @author       qzhengpyuan
+// @tag          雨课堂
+// @tag          课件下载
+// @tag          学习辅助
+// @tag          视频下载
 // @match        https://changjiang.yuketang.cn/v2/web/studentLog/*
 // @match        https://changjiang.yuketang.cn/ai-workspace/lms-graph/*/video/*
 // @grant        GM_xmlhttpRequest
