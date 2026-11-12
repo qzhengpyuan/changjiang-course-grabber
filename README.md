@@ -5,6 +5,7 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 视频可以拿到带签名的 MP4 直链并直接下载。
 
 仓库地址：<https://github.com/qzhengpyuan/changjiang-course-grabber>
+脚本猫脚本站：<https://scriptcat.org/zh-CN/script-show-page/9063>（站内搜索「长江雨课堂 课件抓取助手」）
 
 ![课程页工具栏](docs/images/screenshot-course.png)
 
