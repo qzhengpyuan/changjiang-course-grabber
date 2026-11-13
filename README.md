@@ -2,7 +2,9 @@
 
 一个脚本猫 / Tampermonkey 用户脚本，用来把**长江雨课堂**（`changjiang.yuketang.cn`）课程里的
 PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片版 PPTX** 或**逐页图片 ZIP**（最后打包成一个压缩包下载），
-视频可以拿到带签名的 MP4 直链并直接下载。
+视频同样支持**整门课一次性下载**：脚本会读「学习内容」的章节树，
+把学习日志里没显示出来的视频也一并找出来（实测一门课日志只列 3 个、章节树里有 7 个），
+也可以只导出带签名的 MP4 直链交给下载器。
 
 仓库地址：<https://github.com/qzhengpyuan/changjiang-course-grabber>
 脚本猫脚本站：<https://scriptcat.org/zh-CN/script-show-page/9063>（站内搜索「长江雨课堂 课件抓取助手」）
@@ -17,10 +19,11 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 
 | 位置 | 按钮 | 作用 |
 | --- | --- | --- |
-| 顶部工具栏 | 扫描课程 | 拉取课程日志，统计 PPT / 视频数量，并把按钮挂到对应卡片上 |
+| 顶部工具栏 | 扫描课程 | 拉取课程日志 + 学习内容章节树，统计 PPT / 视频数量（并说明多出来的视频来自哪），把按钮挂到对应卡片上 |
 | 顶部工具栏 | 全课 PPT→PDF | 整门课导出，**最后打包成一个 ZIP 下载一次**，内含各课件 PDF |
 | 顶部工具栏 | 全课 PPT→ZIP | 同上，包内是按课件分的逐页 JPG 目录（`001.jpg`…） |
 | 顶部工具栏 | 全课 PPT→PPTX | 同上，包内是各课件的图片版 PPTX（可在 PowerPoint / WPS 打开、放映、批注） |
+| 顶部工具栏 | 全课视频↓MP4 | 把章节树里的**全部视频**逐个下载成 MP4（含日志里没列出的那些），一个一个来，带进度 |
 | 顶部工具栏 | 视频直链清单 | 导出全部视频的 MP4 直链（含两种清晰度）为 txt，可交给 aria2 / 下载器 |
 | 课件卡片 | PDF / 图片ZIP / PPTX | 单个课件导出 |
 | 视频卡片 | 视频 / 直链 | 下载该视频 MP4 / 复制直链到剪贴板 |
@@ -70,10 +73,16 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 ## 用法
 
 1. 打开课程「学习日志」页，等工具栏出现；
-2. 先点 **扫描课程**（控制台/面板会显示 `PPT n 个，视频 m 个`）；
+2. 先点 **扫描课程**（面板会显示 `PPT n 个，视频 m 个（日志 a + 学习内容 b）；学习内容里视频 …、课件 …、课堂 …、作业 …`）；
 3. 想整门课导出就点 **全课 PPT→PDF / ZIP / PPTX**：整门课全部生成完后**只会下载一个压缩包**，
    命名形如 `示例课程_PDF_20260101-1200.zip`；只想要某一份就点那一行卡片上的按钮；
-4. 文件落在浏览器默认下载目录（Chrome/Edge 一般是 `~/Downloads`）。
+4. 视频：点 **全课视频↓MP4** 会按「学习内容」章节树逐个下载；
+   只要某几个就用 **视频直链清单** 导出 txt，把链接丢给 aria2 / IDM；
+5. 文件落在浏览器默认下载目录（Chrome/Edge 一般是 `~/Downloads`）。
+
+> 为什么日志里只有 3 个视频、点「全课视频」却下了 7 个？
+> 「学习日志」只列出老师发布到日志流里的活动；「学习内容」是按章节组织的完整课程树，
+> 里面还包含从章节进入、没进日志流的视频。脚本以章节树为准，日志作兜底。
 
 批量包内结构：
 
@@ -152,6 +161,8 @@ ZIP 输出就是逐页原图打包，方便单独取图；要整页排好版的�
 | --- | --- |
 | 课程列表 | `GET /v2/api/web/courses/list?identity=2` |
 | 课程日志 | `GET /v2/api/web/logs/learn/{classroom_id}?actype=-1&page={p}&offset=20&sort=-1`（`type` 2=课件 17=视频 14=课堂 19=作业 9=学习任务 15=公告） |
+| 课程元信息 | `GET /v2/api/web/classrooms/{cid}?role=5` → `uv_id`、`course_sign` |
+| 学习内容章节树 | `GET /mooc-api/v1/lms/learn/course/chapter?cid={cid}&sign={sign}&term=latest&uv_id={uv_id}&classroom_id={cid}` → `course_chapter[].section_leaf_list[]`，`leaf_type` **0=视频 6=作业 7=课件 8=课堂** |
 | 课件分页 | `GET /v2/api/web/cards/detlist/{courseware_id}?classroom_id={cid}` → `Slides[].Cover`、`Width/Height`、`ppt_file_id` |
 | 视频信息 | `GET /mooc-api/v1/lms/learn/leaf_info/{cid}/{leaf_id}/?classroom_id={cid}` → `content_info.media.ccid` |
 | 视频直链 | `GET /api/open/audiovideo/playurl?video_id={ccid}&provider=cc&file_type=1&is_single=0&domain=changjiang.yuketang.cn` → `playurl.sources.quality20/quality10` |

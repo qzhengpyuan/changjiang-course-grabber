@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         长江雨课堂 课件抓取助手
 // @namespace    https://github.com/qzhengpyuan/changjiang-course-grabber
-// @version      2.3.3
+// @version      2.4.0
 // @icon         https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-64.png
 // @icon64       https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-128.png
 // @homepageURL  https://github.com/qzhengpyuan/changjiang-course-grabber
@@ -17,6 +17,7 @@
 // @tag          视频下载
 // @match        https://changjiang.yuketang.cn/v2/web/studentLog/*
 // @match        https://changjiang.yuketang.cn/ai-workspace/lms-graph/*/video/*
+// @match        https://changjiang.yuketang.cn/pro/lms/*/studycontent*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
 // @grant        GM_setValue
@@ -789,7 +790,10 @@
 
   function detectClassroomId() {
     const match = location.pathname.match(/\/studentLog\/(\d+)/);
-    return match ? match[1] : null;
+    if (match) return match[1];
+    // 学习内容（/pro/lms/{sign}/{classroom_id}/studycontent）
+    const proMatch = location.pathname.match(/\/pro\/lms\/[^/]+\/(\d+)\/studycontent/);
+    return proMatch ? proMatch[1] : null;
   }
 
   async function fetchActivities(onProgress) {
@@ -869,6 +873,44 @@
       if (Array.isArray(list)) ordered.push(...list.filter(Boolean));
     }
     return { primary: ordered[0] || null, ordered, sources };
+  }
+
+  // 课程元信息（uv_id / course_sign），章节接口要用
+  async function fetchClassroomMeta() {
+    const data = await fetchJson(`/v2/api/web/classrooms/${classroomId}?role=5`);
+    const info = data.data || {};
+    return {
+      uvId: info.uv_id ? String(info.uv_id) : "",
+      courseSign: info.course_sign || "",
+      courseName: info.course_name || info.name || "",
+    };
+  }
+
+  // 「学习内容」章节树里的全部学习单元。leaf_type：0=视频 6=作业 7=课件 8=课堂
+  async function fetchChapterLeaves(onProgress) {
+    const meta = await fetchClassroomMeta();
+    const uv = meta.uvId || "3721";
+    const signPart = meta.courseSign ? `&sign=${encodeURIComponent(meta.courseSign)}` : "";
+    const data = await fetchJson(
+      `/mooc-api/v1/lms/learn/course/chapter?cid=${classroomId}${signPart}&term=latest&uv_id=${uv}&classroom_id=${classroomId}`
+    );
+    const chapters = (data.data && data.data.course_chapter) || [];
+    const leaves = [];
+    const walk = (nodes, chapterName) => {
+      for (const node of nodes || []) {
+        const currentChapter = chapterName || (node.name || "").trim();
+        if (node.section_leaf_list) {
+          walk(node.section_leaf_list, currentChapter);
+        } else if (node.leaf_type !== undefined) {
+          leaves.push(Object.assign({}, node, { name: (node.name || "").trim(), chapter: currentChapter }));
+        }
+      }
+    };
+    walk(chapters, "");
+    if (typeof onProgress === "function") {
+      onProgress({ stage: "读取学习内容", current: leaves.length, total: leaves.length, detail: `章节 ${chapters.length} 个，学习单元 ${leaves.length} 个` });
+    }
+    return { meta, leaves };
   }
 
   /* ------------------------------------------------------------------ */
@@ -1024,6 +1066,10 @@
     allPptxButton.addEventListener("click", () => handleBatch(doc, "pptx", allPptxButton));
     toolbar.appendChild(allPptxButton);
 
+    const allVideoButton = createButton(doc, "全课视频↓MP4", "cjyk-btn-secondary");
+    allVideoButton.addEventListener("click", () => handleAllVideos(doc, allVideoButton));
+    toolbar.appendChild(allVideoButton);
+
     const linkButton = createButton(doc, "视频直链清单", "cjyk-btn-secondary");
     linkButton.addEventListener("click", () => handleVideoList(doc, linkButton));
     toolbar.appendChild(linkButton);
@@ -1137,6 +1183,8 @@
 
   const state = {
     activities: [],
+    chapterLeaves: null,
+    chapterMeta: null,
     busy: false,
   };
 
@@ -1146,6 +1194,22 @@
 
   function videoActivities() {
     return state.activities.filter((activity) => activity.type === 17 && activity.content && activity.content.leaf_id);
+  }
+
+  async function ensureChapterLeaves(reporter) {
+    if (state.chapterLeaves) return state.chapterLeaves;
+    if (!classroomId) throw new Error("未识别到 classroom_id");
+    const result = await fetchChapterLeaves(reporter);
+    state.chapterMeta = result.meta;
+    state.chapterLeaves = result.leaves;
+    return state.chapterLeaves;
+  }
+
+  // 章节树里的视频单元（覆盖学习日志里看不到的那些）
+  function chapterVideoLeaves() {
+    return (state.chapterLeaves || [])
+      .filter((leaf) => leaf.leaf_type === 0 && leaf.id)
+      .map((leaf) => ({ title: leaf.name, leafId: leaf.id, chapter: leaf.chapter }));
   }
 
   async function ensureActivities(doc, reporter) {
@@ -1465,8 +1529,22 @@
     const panel = createProgressPanel(doc, "视频直链清单");
     const reporter = createProgressReporter(button, panel);
     try {
-      await ensureActivities(doc, reporter);
-      const list = videoActivities();
+      let list = [];
+      try {
+        const leaves = await ensureChapterLeaves(reporter);
+        list = leaves
+          .filter((leaf) => leaf.leaf_type === 0 && leaf.id)
+          .map((leaf) => ({ title: leaf.name, leafId: leaf.id }));
+      } catch (error) {
+        console.warn(`[${APP}] 章节树读取失败，退回学习日志`, error);
+      }
+      if (!list.length) {
+        await ensureActivities(doc, reporter);
+        list = videoActivities().map((activity) => ({
+          title: activity.title,
+          leafId: activity.content && activity.content.leaf_id,
+        }));
+      }
       if (!list.length) {
         showToast(doc, "本课没有可解析的视频", "error");
         return;
@@ -1478,21 +1556,112 @@
         "",
       ];
       for (let index = 0; index < list.length; index += 1) {
-        const activity = list[index];
-        reporter({ stage: `(${index + 1}/${list.length}) ${activity.title}`, current: index, total: list.length, detail: "" });
+        const item = list[index];
+        reporter({ stage: `(${index + 1}/${list.length}) ${item.title}`, current: index, total: list.length, detail: "" });
         try {
-          const { info, urls } = await resolveVideoUrls(activity);
-          lines.push(`## ${activity.title}`, `ccid=${info.ccid}`, `size=${info.size || ""}`);
+          const info = await fetchVideoInfo(item.leafId);
+          if (!info.ccid) throw new Error("未取到视频 ID");
+          const urls = await fetchVideoUrls(info.ccid);
+          lines.push(`## ${item.title}`, `leaf_id=${item.leafId}`, `ccid=${info.ccid}`, `size=${info.size || ""}`);
           urls.ordered.forEach((url, order) => lines.push(`url${order + 1}=${url}`));
           lines.push("");
         } catch (error) {
-          lines.push(`## ${activity.title}`, `# 失败：${error.message}`, "");
+          lines.push(`## ${item.title}`, `# 失败：${error.message}`, "");
         }
       }
       const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
       triggerBlobDownload(doc, blob, `视频直链_${classroomId}_${timestampName()}.txt`);
       showToast(doc, "直链清单已导出", "success");
       panel.close(4000);
+    } catch (error) {
+      reporter({ stage: "失败", current: 0, total: 0, detail: error.message });
+      showToast(doc, `失败：${error.message}`, "error", 5000);
+    } finally {
+      state.busy = false;
+      restore();
+    }
+  }
+
+  // 整门课的视频逐个下载（学习内容章节树为准，日志兜底）
+  async function handleAllVideos(doc, button) {
+    if (state.busy) {
+      showToast(doc, "已有任务在进行中", "error");
+      return;
+    }
+    const restore = setButtonBusy(button, "准备中");
+    const panel = createProgressPanel(doc, "全课视频 → MP4");
+    const reporter = createProgressReporter(button, panel);
+    const used = new Set();
+    try {
+      let list = [];
+      try {
+        const leaves = await ensureChapterLeaves(reporter);
+        list = leaves.filter((leaf) => leaf.leaf_type === 0 && leaf.id);
+      } catch (error) {
+        console.warn(`[${APP}] 章节树读取失败，退回学习日志`, error);
+      }
+      if (!list.length) {
+        await ensureActivities(doc, reporter);
+        list = videoActivities().map((activity) => ({
+          name: activity.title,
+          id: activity.content && activity.content.leaf_id,
+        }));
+      }
+      if (!list.length) {
+        showToast(doc, "本课没有视频", "error");
+        return;
+      }
+
+      const jobs = [];
+      let totalBytes = 0;
+      for (let index = 0; index < list.length; index += 1) {
+        const leaf = list[index];
+        const name = leaf.name;
+        const leafId = leaf.id;
+        reporter({ stage: `(${index + 1}/${list.length}) 解析 ${name}`, current: index, total: list.length, detail: "" });
+        try {
+          const info = await fetchVideoInfo(leafId);
+          if (!info.ccid) throw new Error("未取到视频 ID");
+          const urls = await fetchVideoUrls(info.ccid);
+          if (!urls.primary) throw new Error("没有可用直链");
+          jobs.push({ name: info.name || name, url: urls.primary, size: info.size || 0 });
+          totalBytes += info.size || 0;
+        } catch (error) {
+          console.warn(`[${APP}] ${name} 解析失败`, error);
+        }
+      }
+      if (!jobs.length) throw new Error("没有可下载的视频");
+
+      const ok = new Set();
+      for (let index = 0; index < jobs.length; index += 1) {
+        const job = jobs[index];
+        const filename = makeUniqueFileName(`${sanitizeFileName(job.name)}.mp4`, used);
+        reporter({
+          stage: `(${index + 1}/${jobs.length}) ${job.name}`,
+          current: index,
+          total: jobs.length,
+          detail: `${formatBytes(job.size)} · 共 ${formatBytes(totalBytes)}`,
+        });
+        try {
+          await downloadVideoFile(job.url, filename, job.size, (progress) => {
+            const loaded = (progress && progress.loaded) || 0;
+            const total = (progress && progress.total) || job.size || 0;
+            reporter({
+              stage: `(${index + 1}/${jobs.length}) ${job.name}`,
+              current: index,
+              total: jobs.length,
+              detail: `${formatBytes(loaded)} / ${formatBytes(total)}`,
+            });
+          });
+          ok.add(job.name);
+          reporter({ stage: `(${index + 1}/${jobs.length}) 完成`, current: index + 1, total: jobs.length, detail: filename });
+        } catch (error) {
+          reporter({ stage: `(${index + 1}/${jobs.length}) 失败`, current: index + 1, total: jobs.length, detail: error.message });
+        }
+        await sleep(500);
+      }
+      showToast(doc, `视频下载：${ok.size}/${jobs.length}（共 ${formatBytes(totalBytes)}）`, ok.size === jobs.length ? "success" : "info", 6000);
+      panel.close(6000);
     } catch (error) {
       reporter({ stage: "失败", current: 0, total: 0, detail: error.message });
       showToast(doc, `失败：${error.message}`, "error", 5000);
@@ -1519,14 +1688,26 @@
       await ensureActivities(doc, reporter);
       mountActionButtons(doc);
       const pptCount = pptActivities().length;
-      const videoCount = videoActivities().length;
+      const logVideoCount = videoActivities().length;
+      let chapterNote = "";
+      let chapterVideoCount = 0;
+      try {
+        const leaves = await ensureChapterLeaves(reporter);
+        const countOf = (type) => leaves.filter((leaf) => leaf.leaf_type === type).length;
+        chapterVideoCount = countOf(0);
+        chapterNote = `；学习内容里视频 ${countOf(0)}、课件 ${countOf(7)}、课堂 ${countOf(8)}、作业 ${countOf(6)}`;
+      } catch (error) {
+        console.warn(`[${APP}] 章节树读取失败`, error);
+      }
+      const videoTotal = Math.max(chapterVideoCount, logVideoCount);
+      const extra = chapterVideoCount > logVideoCount ? `（日志 ${logVideoCount} + 学习内容 ${chapterVideoCount - logVideoCount}）` : "";
       reporter({
         stage: "扫描完成",
         current: state.activities.length,
         total: state.activities.length,
-        detail: `PPT ${pptCount} 个，视频 ${videoCount} 个`,
+        detail: `PPT ${pptCount} 个，视频 ${videoTotal} 个${extra}${chapterNote}`,
       });
-      showToast(doc, `扫描完成：PPT ${pptCount} 个，视频 ${videoCount} 个`, "success", 4000);
+      showToast(doc, `扫描完成：PPT ${pptCount} 个，视频 ${videoTotal} 个${extra}`, "success", 5000);
       panel.close(5000);
     } catch (error) {
       reporter({ stage: "失败", current: 0, total: 0, detail: error.message });
@@ -1577,6 +1758,8 @@
 
   function initDocument(doc) {
     if (doc !== document) return;
+    // 学习内容页常常是学习日志里嵌的 iframe，顶层已经有工具栏，这里不再重复挂
+    if (/\/pro\/lms\/[^/]+\/\d+\/studycontent/.test(location.pathname) && window.top !== window.self) return;
     addStylesOnce(doc);
 
     if (/\/lms-graph\/\d+\/video\//.test(location.pathname)) {
