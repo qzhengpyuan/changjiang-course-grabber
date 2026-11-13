@@ -20,16 +20,17 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 | 位置 | 按钮 | 作用 |
 | --- | --- | --- |
 | 顶部工具栏 | 扫描课程 | 拉取课程日志 + 学习内容章节树，统计 PPT / 视频数量（并说明多出来的视频来自哪），把按钮挂到对应卡片上 |
-| 顶部工具栏 | 全课 PPT→PDF | 整门课导出，**最后打包成一个 ZIP 下载一次**，内含各课件 PDF |
-| 顶部工具栏 | 全课 PPT→ZIP | 同上，包内是按课件分的逐页 JPG 目录（`001.jpg`…） |
-| 顶部工具栏 | 全课 PPT→PPTX | 同上，包内是各课件的图片版 PPTX（可在 PowerPoint / WPS 打开、放映、批注） |
-| 顶部工具栏 | 全课视频↓MP4 | 把章节树里的**全部视频**逐个下载成 MP4（含日志里没列出的那些），一个一个来，带进度 |
+| 顶部工具栏 | **批量下载** | 弹出勾选面板：列出全部 PPT 与视频，逐条打勾；可选「全选 / 全部 PPT / 全部视频」，PPT 还能选输出格式；确认后一次跑完 |
 | 顶部工具栏 | 视频直链清单 | 导出全部视频的 MP4 直链（含两种清晰度）为 txt，可交给 aria2 / 下载器 |
 | 课件卡片 | PDF / 图片ZIP / PPTX | 单个课件导出 |
 | 视频卡片 | 视频 / 直链 | 下载该视频 MP4 / 复制直链到剪贴板 |
 | 视频页（右下角） | 下载 MP4 | 在学习空间视频页直接下载当前视频 |
 
-![工具栏按钮（含全课视频）](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/toolbar-v24.png)
+批量下载面板长这样（勾选要下的条目，PPT 格式在右上角下拉框里选）：
+
+![批量下载面板](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/dialog-batch.png)
+
+![工具栏按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/toolbar-v25.png)
 
 ![卡片上的按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/screenshot-card-buttons.png)
 
@@ -48,6 +49,7 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 ### 脚本猫（ScriptCat）／ Tampermonkey
 
 1. 浏览器装好 [脚本猫](https://scriptcat.org/) 或 Tampermonkey；
+   在脚本站打开 <https://scriptcat.org/zh-CN/script-show-page/9063> 点「安装脚本」最省事；
 2. 打开下面的地址，脚本管理器会弹出安装页，点「安装」：
 
    - jsDelivr（默认，国内可直连）：<https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/changjiang-courseware-grabber.user.js>
@@ -75,11 +77,14 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 ## 用法
 
 1. 打开课程「学习日志」页，等工具栏出现；
-2. 先点 **扫描课程**（面板会显示 `PPT n 个，视频 m 个（日志 a + 学习内容 b）；学习内容里视频 …、课件 …、课堂 …、作业 …`）；
-3. 想整门课导出就点 **全课 PPT→PDF / ZIP / PPTX**：整门课全部生成完后**只会下载一个压缩包**，
-   命名形如 `示例课程_PDF_20260101-1200.zip`；只想要某一份就点那一行卡片上的按钮；
-4. 视频：点 **全课视频↓MP4** 会按「学习内容」章节树逐个下载；
-   只要某几个就用 **视频直链清单** 导出 txt，把链接丢给 aria2 / IDM；
+2. 点 **批量下载** 弹出面板：
+   - 上面一排：`全选` / `全部 PPT` / `全部视频`，勾选会联动的（部分选中显示为半选）；
+   - 中间列表：PPT 课件（带页数）和视频（带所属章节），每条左边有复选框，想下哪个勾哪个；
+   - `PPT 格式` 下拉：PDF / ZIP（逐页图片）/ PPTX（图片版）；
+   - 右下角 **开始下载**；**导出直链** 则是把视频直链导成 txt；
+3. 执行规则：选中的 PPT 先全部生成，**最后打包成一个 ZIP 下载一次**（只选了一个 PPT 时直接下那个文件，不套 ZIP）；
+   选中的视频按章节顺序逐个下载成 MP4；
+4. 只想要某一份，也可以直接点那一行卡片上的小按钮；
 5. 文件落在浏览器默认下载目录（Chrome/Edge 一般是 `~/Downloads`）。
 
 > 为什么日志里只有 3 个视频、点「全课视频」却下了 7 个？
@@ -131,7 +136,8 @@ PPTX 实测：37 页课件导出 `示例课件.pptx`（约 2.6 MB），LibreOffi
 **Q：点「全课 PPT→PDF」只下载到一份？**
 v2.0.1 起改走 `GM_download`（`chrome.downloads`，不受「一次点击只能下载一个文件」的限制）；
 **v2.3.0 起批量改成「整门课生成完 → 打包成一个 ZIP → 只下载这一次」**，从根上绕开多文件下载限制
-（和学习通抓取助手同一套做法）。单课件按钮仍然下载单个文件。
+（和学习通抓取助手同一套做法）。**v2.5.0 起工具栏只留一个「批量下载」按钮**，弹窗里勾选要下的条目，
+PPT 格式在弹窗里选，选中的 PPT 仍然打成一个 ZIP。单课件按钮仍然下载单个文件。
 实测 ScriptCat 1.5.1 + Vivaldi：6 份课件 → 一个 31~33 MB 的 ZIP，`unzip -t` 通过、中文名不乱码。
 
 **Q：下载走的是浏览器下载还是别的东西？**

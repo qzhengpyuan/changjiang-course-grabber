@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         长江雨课堂 课件抓取助手
 // @namespace    https://github.com/qzhengpyuan/changjiang-course-grabber
-// @version      2.4.0
+// @version      2.5.0
 // @icon         https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-64.png
 // @icon64       https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-128.png
 // @homepageURL  https://github.com/qzhengpyuan/changjiang-course-grabber
 // @supportURL   https://github.com/qzhengpyuan/changjiang-course-grabber/issues
-// @updateURL    https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/changjiang-courseware-grabber.user.js
-// @downloadURL  https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/changjiang-courseware-grabber.user.js
+// @updateURL    https://scriptcat.org/scripts/code/9063/9063.user.js
+// @downloadURL  https://scriptcat.org/scripts/code/9063/9063.user.js
 // @license      MIT
 // @description  抓取长江雨课堂课程的 PPT 课件（合并 PDF / 图片版 PPTX / 图片 ZIP）与视频直链，支持整门课批量。基于「学习通 PDF 抓取助手」的工具栏、进度面板与 STORE ZIP 框架改写。
 // @author       qzhengpyuan
@@ -136,6 +136,26 @@
     .cjyk-modal-close { position: absolute; right: 10px; top: 8px; border: none; background: transparent; font-size: 18px; color: #8493a8; cursor: pointer; }
     .cjyk-modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
     .cjyk-modal-size { margin-top: 8px; color: #b02a2a; font-weight: 600; }
+
+    .cjyk-dl-modal { width: min(580px, 94vw); max-height: 88vh; display: flex; flex-direction: column; }
+    .cjyk-dl-toolbar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin: 10px 0 8px; font-size: 12px; color: #334155; }
+    .cjyk-dl-toolbar label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+    .cjyk-dl-format select { margin-left: 4px; padding: 2px 4px; border: 1px solid #cfd8e6; border-radius: 4px; background: #fff; color: #1b2733; font-size: 12px; }
+    .cjyk-dl-list { flex: 1; overflow: auto; border: 1px solid #e2e8f2; border-radius: 8px; padding: 4px 6px; min-height: 120px; }
+    .cjyk-dl-section-head { font-size: 12px; font-weight: 600; color: #64748b; padding: 6px 4px 2px; }
+    .cjyk-dl-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+    .cjyk-dl-row:hover { background: #f6f9ff; }
+    /* 站点全局样式会把 checkbox 压成 0×0 / appearance:none，这里强制还原 */
+    .cjyk-dl-row input[type="checkbox"],
+    .cjyk-dl-toolbar input[type="checkbox"] {
+      appearance: auto; -webkit-appearance: checkbox; width: 14px; height: 14px;
+      min-width: 14px; margin: 0; flex: none; accent-color: #2f7df6; cursor: pointer;
+    }
+    .cjyk-dl-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cjyk-dl-meta { color: #8493a8; font-size: 11px; white-space: nowrap; }
+    .cjyk-dl-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; gap: 10px; }
+    .cjyk-dl-actions { display: flex; gap: 8px; }
+    .cjyk-dl-summary { color: #64748b; font-size: 12px; }
   `;
 
   /* ------------------------------------------------------------------ */
@@ -1054,21 +1074,9 @@
     scanButton.addEventListener("click", () => handleScan(doc, scanButton));
     toolbar.appendChild(scanButton);
 
-    const allPdfButton = createButton(doc, "全课 PPT→PDF", "cjyk-btn-secondary");
-    allPdfButton.addEventListener("click", () => handleBatch(doc, "pdf", allPdfButton));
-    toolbar.appendChild(allPdfButton);
-
-    const allZipButton = createButton(doc, "全课 PPT→ZIP", "cjyk-btn-secondary");
-    allZipButton.addEventListener("click", () => handleBatch(doc, "zip", allZipButton));
-    toolbar.appendChild(allZipButton);
-
-    const allPptxButton = createButton(doc, "全课 PPT→PPTX", "cjyk-btn-secondary");
-    allPptxButton.addEventListener("click", () => handleBatch(doc, "pptx", allPptxButton));
-    toolbar.appendChild(allPptxButton);
-
-    const allVideoButton = createButton(doc, "全课视频↓MP4", "cjyk-btn-secondary");
-    allVideoButton.addEventListener("click", () => handleAllVideos(doc, allVideoButton));
-    toolbar.appendChild(allVideoButton);
+    const batchButton = createButton(doc, "批量下载", "");
+    batchButton.addEventListener("click", () => openDownloadDialog(doc));
+    toolbar.appendChild(batchButton);
 
     const linkButton = createButton(doc, "视频直链清单", "cjyk-btn-secondary");
     linkButton.addEventListener("click", () => handleVideoList(doc, linkButton));
@@ -1750,6 +1758,303 @@
     });
     bar.appendChild(button);
     doc.body.appendChild(bar);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 批量下载对话框                                                      */
+  /* ------------------------------------------------------------------ */
+
+  const PPT_FORMATS = [
+    { id: "pdf", label: "PDF（体积小，阅读/打印）" },
+    { id: "zip", label: "ZIP（逐页 JPG 图片）" },
+    { id: "pptx", label: "PPTX（图片版，可放映/批注）" },
+  ];
+
+  // 汇总「可下载的东西」：学习日志里的 PPT + 学习内容章节树里的视频（日志兜底）
+  async function collectDownloadItems(reporter) {
+    const ppts = [];
+    const videos = [];
+    try {
+      await ensureActivities(null, reporter);
+      for (const activity of pptActivities()) {
+        ppts.push({
+          kind: "ppt",
+          id: String(activity.courseware_id),
+          title: activity.title,
+          meta: activity.count ? `${activity.count} 页` : "PPT 课件",
+        });
+      }
+    } catch (error) {
+      console.warn(`[${APP}] 课程日志读取失败`, error);
+    }
+    try {
+      const leaves = await ensureChapterLeaves(reporter);
+      for (const leaf of leaves) {
+        if (leaf.leaf_type === 0 && leaf.id) {
+          videos.push({ kind: "video", id: String(leaf.id), title: leaf.name, meta: leaf.chapter || "视频" });
+        }
+      }
+    } catch (error) {
+      console.warn(`[${APP}] 章节树读取失败`, error);
+    }
+    if (!videos.length) {
+      for (const activity of videoActivities()) {
+        videos.push({
+          kind: "video",
+          id: String(activity.content.leaf_id),
+          title: activity.title,
+          meta: "视频",
+        });
+      }
+    }
+    return { ppts, videos };
+  }
+
+  function closeDialog(backdrop) {
+    if (backdrop && backdrop.parentNode) backdrop.remove();
+    delete document.documentElement.dataset.cjykDialog;
+  }
+
+  let dialogOpening = false;
+
+  async function openDownloadDialog(doc) {
+    if (state.busy) {
+      showToast(doc, "已有任务在进行中", "error");
+      return;
+    }
+    // 同一个页面可能注入了多份脚本实例，点一次会触发多次；这里做单例保护
+    // （锁挂在 document 上，跨实例共享；只用模块变量在多次注入时会各算各的）
+    if (dialogOpening || doc.documentElement.dataset.cjykDialog === "1") return;
+    if (doc.querySelector(".cjyk-dl-backdrop")) return;
+    dialogOpening = true;
+    doc.documentElement.dataset.cjykDialog = "1";
+    showToast(doc, "正在读取课程内容…", "info", 2000);
+    let items;
+    try {
+      items = await collectDownloadItems(null);
+    } catch (error) {
+      dialogOpening = false;
+      delete doc.documentElement.dataset.cjykDialog;
+      showToast(doc, `读取失败：${error.message}`, "error", 5000);
+      return;
+    }
+    if (!items.ppts.length && !items.videos.length) {
+      dialogOpening = false;
+      delete doc.documentElement.dataset.cjykDialog;
+      showToast(doc, "本课没有可下载的内容", "error");
+      return;
+    }
+    Array.from(doc.querySelectorAll(".cjyk-dl-backdrop")).forEach((node) => node.remove());
+
+    const sectionHtml = (title, list) => list.length
+      ? `<div class="cjyk-dl-section">
+          <div class="cjyk-dl-section-head">${escapeHtml(title)}（${list.length}）</div>
+          ${list.map((item) => `
+            <label class="cjyk-dl-row">
+              <input type="checkbox" data-kind="${item.kind}" data-id="${escapeHtml(item.id)}" data-title="${escapeHtml(item.title)}">
+              <span class="cjyk-dl-name" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</span>
+              <span class="cjyk-dl-meta">${escapeHtml(item.meta)}</span>
+            </label>`).join("")}
+        </div>`
+      : "";
+
+    const backdrop = doc.createElement("div");
+    backdrop.className = "cjyk-modal-backdrop cjyk-dl-backdrop";
+    backdrop.innerHTML = `
+      <div class="cjyk-modal cjyk-dl-modal" role="dialog" aria-modal="true">
+        <button type="button" class="cjyk-modal-close" aria-label="关闭">×</button>
+        <h3 class="cjyk-modal-title">批量下载 · ${escapeHtml(currentCourseTitle())}</h3>
+        <div class="cjyk-dl-toolbar">
+          <label><input type="checkbox" data-role="all"> 全选</label>
+          <label><input type="checkbox" data-role="all-ppt"> 全部 PPT</label>
+          <label><input type="checkbox" data-role="all-video"> 全部视频</label>
+          <label class="cjyk-dl-format">PPT 格式
+            <select data-role="format">${PPT_FORMATS.map((item) => `<option value="${item.id}">${item.label}</option>`).join("")}</select>
+          </label>
+        </div>
+        <div class="cjyk-dl-list">
+          ${sectionHtml("PPT 课件", items.ppts)}
+          ${sectionHtml("视频", items.videos)}
+        </div>
+        <div class="cjyk-dl-foot">
+          <span class="cjyk-dl-summary" data-role="summary">未选择</span>
+          <div class="cjyk-dl-actions">
+            <button type="button" class="cjyk-btn cjyk-btn-secondary" data-role="links">导出直链</button>
+            <button type="button" class="cjyk-btn" data-role="start" disabled>开始下载</button>
+          </div>
+        </div>
+      </div>`;
+    doc.body.appendChild(backdrop);
+
+    const boxes = () => Array.from(backdrop.querySelectorAll('input[type="checkbox"][data-id]'));
+    const boxesOf = (kind) => boxes().filter((box) => box.dataset.kind === kind);
+    const allBox = backdrop.querySelector('[data-role="all"]');
+    const allPptBox = backdrop.querySelector('[data-role="all-ppt"]');
+    const allVideoBox = backdrop.querySelector('[data-role="all-video"]');
+    const formatSelect = backdrop.querySelector('[data-role="format"]');
+    const summary = backdrop.querySelector('[data-role="summary"]');
+    const startButton = backdrop.querySelector('[data-role="start"]');
+
+    const sync = () => {
+      const selected = boxes().filter((box) => box.checked);
+      const pptSelected = selected.filter((box) => box.dataset.kind === "ppt").length;
+      const videoSelected = selected.length - pptSelected;
+      summary.textContent = selected.length
+        ? `已选 ${selected.length} 项（PPT ${pptSelected} · 视频 ${videoSelected}）`
+        : "未选择";
+      startButton.disabled = selected.length === 0;
+      const pptBoxes = boxesOf("ppt");
+      const videoBoxes = boxesOf("video");
+      allPptBox.checked = pptBoxes.length > 0 && pptBoxes.every((box) => box.checked);
+      allPptBox.indeterminate = !allPptBox.checked && pptBoxes.some((box) => box.checked);
+      allVideoBox.checked = videoBoxes.length > 0 && videoBoxes.every((box) => box.checked);
+      allVideoBox.indeterminate = !allVideoBox.checked && videoBoxes.some((box) => box.checked);
+      allBox.checked = boxes().length > 0 && boxes().every((box) => box.checked);
+      allBox.indeterminate = !allBox.checked && boxes().some((box) => box.checked);
+    };
+
+    boxes().forEach((box) => box.addEventListener("change", sync));
+    allBox.addEventListener("change", () => {
+      boxes().forEach((box) => { box.checked = allBox.checked; });
+      sync();
+    });
+    allPptBox.addEventListener("change", () => {
+      boxesOf("ppt").forEach((box) => { box.checked = allPptBox.checked; });
+      sync();
+    });
+    allVideoBox.addEventListener("change", () => {
+      boxesOf("video").forEach((box) => { box.checked = allVideoBox.checked; });
+      sync();
+    });
+    backdrop.querySelector(".cjyk-modal-close").addEventListener("click", () => closeDialog(backdrop));
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) closeDialog(backdrop);
+    });
+    backdrop.querySelector('[data-role="links"]').addEventListener("click", async (event) => {
+      closeDialog(backdrop);
+      await handleVideoList(doc, event.currentTarget);
+    });
+    startButton.addEventListener("click", async () => {
+      const chosen = boxes().filter((box) => box.checked).map((box) => ({
+        kind: box.dataset.kind,
+        id: box.dataset.id,
+        title: box.dataset.title || box.dataset.id,
+      }));
+      const mode = formatSelect.value;
+      closeDialog(backdrop);
+      await runDownloadPlan(doc, chosen, mode);
+    });
+
+    sync();
+    dialogOpening = false;
+    delete doc.documentElement.dataset.cjykDialog;
+  }
+
+  // 按对话框里勾选的结果执行：PPT 先全部生成再打一个包，视频逐个下载
+  async function runDownloadPlan(doc, chosen, pptMode) {
+    if (!chosen.length) return;
+    state.busy = true;
+    const panel = createProgressPanel(doc, "批量下载");
+    const reporter = createProgressReporter(null, panel);
+    const used = new Set();
+    const ppts = chosen.filter((item) => item.kind === "ppt");
+    const videos = chosen.filter((item) => item.kind === "video");
+    const pickedPpts = pptActivities().filter((activity) => ppts.some((item) => item.id === String(activity.courseware_id)));
+    let doneVideos = 0;
+    try {
+      if (pickedPpts.length) {
+        const entries = [];
+        let ok = 0;
+        for (let index = 0; index < pickedPpts.length; index += 1) {
+          const activity = pickedPpts[index];
+          const safeTitle = sanitizeFileName(activity.title) || `课件${index + 1}`;
+          const stage = `PPT ${index + 1}/${pickedPpts.length}：${activity.title}`;
+          reporter({ stage, current: index, total: pickedPpts.length, detail: "" });
+          try {
+            const { pages, meta } = await collectSlides(activity, (progress) => {
+              reporter({ stage, current: progress.current, total: progress.total, detail: progress.detail });
+            });
+            if (pptMode === "zip") {
+              for (const page of pages) {
+                entries.push({
+                  path: `${safeTitle}/${String(page.pageIndex).padStart(3, "0")}.jpg`,
+                  data: new Uint8Array(page.buffer),
+                });
+              }
+            } else {
+              const { blob } = await buildPptOutput(activity, pages, meta, pptMode, null);
+              entries.push({
+                path: `${safeTitle}.${pptMode === "pptx" ? "pptx" : "pdf"}`,
+                data: new Uint8Array(await blob.arrayBuffer()),
+              });
+            }
+            ok += 1;
+          } catch (error) {
+            console.warn(`[${APP}] ${activity.title} 生成失败`, error);
+          }
+        }
+
+        if (entries.length === 1 && pptMode !== "zip") {
+          const only = entries[0];
+          const mime = pptMode === "pptx"
+            ? "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            : "application/pdf";
+          triggerBlobDownload(doc, new Blob([only.data], { type: mime }), only.path.split("/").pop());
+        } else if (entries.length) {
+          const label = pptMode === "zip" ? "图片ZIP" : pptMode.toUpperCase();
+          reporter({ stage: "打包 PPT", current: 0, total: entries.length, detail: `${entries.length} 个文件` });
+          const zipBlob = await createStoredZipBlob(entries, (current, total, detail) => {
+            reporter({ stage: "打包 PPT", current, total, detail });
+          });
+          const filename = makeUniqueFileName(
+            `${sanitizeFileName(currentCourseTitle())}_PPT_${label}_${timestampForName()}.zip`,
+            used
+          );
+          triggerBlobDownload(doc, zipBlob, filename);
+        }
+        if (ok) showToast(doc, `PPT 已处理 ${ok}/${pickedPpts.length} 个`, "success", 4000);
+      }
+
+      for (let index = 0; index < videos.length; index += 1) {
+        const item = videos[index];
+        const stage = `视频 ${index + 1}/${videos.length}：${item.title}`;
+        reporter({ stage, current: index, total: videos.length, detail: "解析直链" });
+        try {
+          const info = await fetchVideoInfo(item.id);
+          if (!info.ccid) throw new Error("未取到视频 ID");
+          const urls = await fetchVideoUrls(info.ccid);
+          if (!urls.primary) throw new Error("没有可用直链");
+          const filename = makeUniqueFileName(`${sanitizeFileName(info.name || item.title)}.mp4`, used);
+          reporter({ stage, current: index, total: videos.length, detail: `${filename} · ${formatBytes(info.size)}` });
+          await downloadVideoFile(urls.primary, filename, info.size, (progress) => {
+            reporter({
+              stage,
+              current: index,
+              total: videos.length,
+              detail: `${formatBytes(progress && progress.loaded)} / ${formatBytes((progress && progress.total) || info.size)}`,
+            });
+          });
+          doneVideos += 1;
+        } catch (error) {
+          reporter({ stage, current: index + 1, total: videos.length, detail: `失败：${error.message}` });
+        }
+        await sleep(400);
+      }
+
+      reporter({
+        stage: "完成",
+        current: chosen.length,
+        total: chosen.length,
+        detail: `PPT ${pickedPpts.length} 个 · 视频 ${doneVideos}/${videos.length}`,
+      });
+      showToast(doc, `批量下载结束：视频 ${doneVideos}/${videos.length}`, "success", 6000);
+      panel.close(7000);
+    } catch (error) {
+      reporter({ stage: "失败", current: 0, total: 0, detail: error.message });
+      showToast(doc, `失败：${error.message}`, "error", 5000);
+    } finally {
+      state.busy = false;
+    }
   }
 
   /* ------------------------------------------------------------------ */
