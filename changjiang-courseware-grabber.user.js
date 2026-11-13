@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         长江雨课堂 课件抓取助手
 // @namespace    https://github.com/qzhengpyuan/changjiang-course-grabber
-// @version      2.7.1
+// @version      2.8.0
 // @icon         https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-64.png
 // @icon64       https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-128.png
 // @homepageURL  https://github.com/qzhengpyuan/changjiang-course-grabber
@@ -54,8 +54,8 @@
 
   const APP = "cjyk";
   const APP_NAME = "changjiang-courseware-grabber";
-  const VERSION = "2.7.1";
-  const STYLE_VERSION = "2.7.1";
+  const VERSION = "2.8.0";
+  const STYLE_VERSION = "2.8.0";
 
   const LOG_PAGE_LIMIT = 30;
   const SLIDE_CONCURRENCY = 3;
@@ -1209,7 +1209,13 @@
           event.stopPropagation();
           handleClassPpt(doc, activity, "pptx", pptxButton);
         });
-        holder.append(pdfButton, zipButton, pptxButton);
+        const audioButton = createButton(doc, "录音", "cjyk-btn-small cjyk-btn-secondary");
+        audioButton.title = "下载这节课的录音（mp3，不是录屏）";
+        audioButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          handleClassAudio(doc, activity, audioButton);
+        });
+        holder.append(pdfButton, zipButton, pptxButton, audioButton);
       } else if (activity.type === 2) {
         const pdfButton = createButton(doc, "PDF", "cjyk-btn-small");
         pdfButton.addEventListener("click", (event) => {
@@ -1445,6 +1451,50 @@
       triggerBlobDownload(doc, blob, filename);
       reporter({ stage: "已下载", current: pages.length, total: pages.length, detail: `${filename} ${formatBytes(blob.size)}` });
       showToast(doc, `已下载 ${filename}（${formatBytes(blob.size)}）`, "success", 4000);
+      panel.close(6000);
+    } catch (error) {
+      reporter({ stage: "失败", current: 0, total: 0, detail: error.message });
+      showToast(doc, `失败：${error.message}`, "error", 5000);
+    } finally {
+      state.busy = false;
+      restore();
+    }
+  }
+
+  // 单节课的课堂录音（回放数据里的音频轨，mp3）
+  async function handleClassAudio(doc, activity, button) {
+    if (state.busy) {
+      showToast(doc, "已有任务在进行中", "error");
+      return;
+    }
+    state.busy = true;
+    const restore = setButtonBusy(button, "处理中");
+    const title = (activity.title || "").trim() || "课堂录音";
+    const panel = createProgressPanel(doc, `${title} 录音`);
+    const reporter = createProgressReporter(button, panel);
+    try {
+      reporter({ stage: "读取课堂录音", current: 0, total: 0, detail: title });
+      const { audioUrl, durationMs } = await fetchClassReplay(String(activity.courseware_id));
+      if (!audioUrl) throw new Error("这节课没有录音");
+      const minutes = durationMs ? Math.round(durationMs / 60000) : 0;
+      const filename = `${sanitizeFileName(title)}_录音.mp3`;
+      reporter({
+        stage: "下载录音",
+        current: 0,
+        total: 0,
+        detail: `${filename}${minutes ? ` · 约 ${minutes} 分钟` : ""}`,
+      });
+      await downloadVideoFile(audioUrl, filename, 0, (progress) => {
+        if (!progress) return;
+        reporter({
+          stage: "下载录音",
+          current: progress.loaded,
+          total: progress.total,
+          detail: `${formatBytes(progress.loaded)} / ${formatBytes(progress.total)}`,
+        });
+      });
+      reporter({ stage: "已下载", current: 1, total: 1, detail: filename });
+      showToast(doc, `已下载 ${filename}${minutes ? `（约 ${minutes} 分钟）` : ""}`, "success", 4000);
       panel.close(6000);
     } catch (error) {
       reporter({ stage: "失败", current: 0, total: 0, detail: error.message });
