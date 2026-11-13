@@ -9,7 +9,7 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 仓库地址：<https://github.com/qzhengpyuan/changjiang-course-grabber>
 脚本猫脚本站：<https://scriptcat.org/zh-CN/script-show-page/9063>（站内搜索「长江雨课堂 课件抓取助手」）
 
-![课程页工具栏](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/screenshot-course.png)
+![课程页工具栏](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/v2/screenshot-course.png)
 
 > 只在**自己已登录**的浏览器里操作自己的课程数据，不绕过任何权限校验。
 
@@ -29,29 +29,29 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 
 批量下载面板长这样（勾选要下的条目，视频行尾是真实文件大小，底部实时汇总已选视频总量；PPT 格式在右上角下拉框里选）：
 
-![批量下载面板](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/dialog-v27.png)
+![批量下载面板](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/v2/dialog-v27.png)
 
 （截图里的课程名与课件名用示例文本替代；`课堂课件` 那一块就是上课时投出来的那套，页数自动补齐，没课件的课会置灰）
 
-![工具栏按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/toolbar-v29.png)
+![工具栏按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/v2/toolbar-v29.png)
 
 精简模式（默认）：每张卡片只有一个 `下载`，格式取设置里的默认格式
 
-![精简模式的卡片按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/screenshot-card-buttons.png)
+![精简模式的卡片按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/v2/screenshot-card-buttons.png)
 
 完整模式：所有按钮直接平铺在卡片上，不折叠、不悬停
 
-![完整模式的卡片按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/screenshot-card-buttons-full.png)
+![完整模式的卡片按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/v2/screenshot-card-buttons-full.png)
 
 下载设置面板：
 
-![下载设置](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/settings-panel.png)
+![下载设置](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/v2/settings-panel.png)
 
 批量任务有进度面板，单个任务成功/失败都会弹提示。
 
 视频页右下角的下载按钮：
 
-![视频页按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/screenshot-video.png)
+![视频页按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/v2/screenshot-video.png)
 
 ---
 
@@ -258,7 +258,7 @@ ZIP 输出就是逐页原图打包，方便单独取图；要整页排好版的�
 ```
 changjiang-course-grabber.user.js   用户脚本本体（单文件）
 assets/                            脚本图标（@icon / @icon64）
-docs/images/                       README 配图
+docs/images/v2/                       README 配图
 reference/                         参考项目「学习通 PDF 抓取助手」原始文件
 tools/                             调试与回归测试脚本（CDP 驱动 :99 影子浏览器）
 ```
