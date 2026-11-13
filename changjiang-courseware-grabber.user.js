@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         长江雨课堂 课件抓取助手
 // @namespace    https://github.com/qzhengpyuan/changjiang-course-grabber
-// @version      2.9.0
+// @version      2.9.1
 // @icon         https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-64.png
 // @icon64       https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-128.png
 // @homepageURL  https://github.com/qzhengpyuan/changjiang-course-grabber
@@ -56,8 +56,8 @@
 
   const APP = "cjyk";
   const APP_NAME = "changjiang-courseware-grabber";
-  const VERSION = "2.9.0";
-  const STYLE_VERSION = "2.9.0";
+  const VERSION = "2.9.1";
+  const STYLE_VERSION = "2.9.1";
 
   const LOG_PAGE_LIMIT = 30;
   const SLIDE_CONCURRENCY = 3;
@@ -189,7 +189,19 @@
     .cjyk-btn-secondary { background: #fff !important; color: #1b2733 !important; border-color: #c4d2ec; }
     .cjyk-btn-secondary:hover { background: #eef4ff !important; }
     .cjyk-btn-small { min-width: 42px; height: 22px; padding: 0 7px; font-size: 11px; }
-    .cjyk-actions-inline { margin-left: 8px; }
+    .cjyk-actions-inline { margin-left: 8px; position: relative; }
+    /* 完整模式下次要按钮平时不占位，鼠标移到卡片上才浮出来（不挤压「学习进度」） */
+    .cjyk-extra {
+      display: none; position: absolute; right: 100%; top: 50%; transform: translateY(-50%);
+      margin-right: 6px; padding: 3px 5px; gap: 6px; align-items: center;
+      /* Canvas 跟随站点深浅色主题，避免深色主题下露出半透明底色 */
+      background: Canvas !important; border: 1px solid rgba(140,155,175,.35); border-radius: 6px;
+      box-shadow: 0 2px 10px rgba(0,0,0,.16);
+      white-space: nowrap; z-index: 6;
+    }
+    .activity-box:hover .cjyk-extra,
+    .cjyk-extra:hover,
+    .cjyk-actions-inline:focus-within .cjyk-extra { display: inline-flex; }
 
     .cjyk-progress {
       position: fixed; right: 18px; bottom: 18px; z-index: 2147483000;
@@ -1348,7 +1360,10 @@
         event.stopPropagation();
         copyAudioLink(doc, activity);
       });
-      holder.append(pdfButton, zipButton, pptxButton, audioButton, audioLinkButton);
+      const extra = doc.createElement("span");
+      extra.className = "cjyk-extra";
+      extra.append(zipButton, pptxButton, audioButton, audioLinkButton);
+      holder.append(pdfButton, extra);
       return holder;
     }
 
@@ -1378,7 +1393,10 @@
         event.stopPropagation();
         handlePpt(doc, activity, "pptx", pptxButton);
       });
-      holder.append(pdfButton, zipButton, pptxButton);
+      const extra = doc.createElement("span");
+      extra.className = "cjyk-extra";
+      extra.append(zipButton, pptxButton);
+      holder.append(pdfButton, extra);
       return holder;
     }
 
@@ -1395,7 +1413,10 @@
         event.stopPropagation();
         copyVideoLink(doc, activity);
       });
-      holder.append(linkButton);
+      const extra = doc.createElement("span");
+      extra.className = "cjyk-extra";
+      extra.append(linkButton);
+      holder.append(extra);
     }
     return holder;
   }
