@@ -23,6 +23,7 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 | 顶部工具栏 | **批量下载** | 弹出勾选面板：列出全部 PPT、视频与课堂课件（视频带真实大小、课堂课件带页数），逐条打勾；可选「全选 / 全部 PPT / 全部视频 / 全部课堂」，PPT 还能选输出格式；确认后一次跑完 |
 | 课件卡片 | PDF / 图片ZIP / PPTX | 单个课件导出 |
 | 课堂卡片 | 课件PDF / 课件ZIP / 课件PPTX | 导出**那节课上课时投出来的课件**（含老师没上传到课程里的课） |
+| 批量面板 | 课堂录音 | 那节课的音频轨（mp3，回放接口里带出来的，默认不勾选） |
 | 视频卡片 | 视频 / 直链 | 下载该视频 MP4 / 复制直链到剪贴板 |
 | 视频页（右下角） | 下载 MP4 | 在学习空间视频页直接下载当前视频 |
 
@@ -30,15 +31,13 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 
 ![批量下载面板](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/dialog-v27.png)
 
-（截图里的课程名与课件名已打码；`课堂课件` 那一块就是上课时投出来的那套，页数自动补齐，没课件的课会置灰）
+（截图里的课程名与课件名用示例文本替代；`课堂课件` 那一块就是上课时投出来的那套，页数自动补齐，没课件的课会置灰）
 
 ![工具栏按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/toolbar-v25.png)
 
 ![卡片上的按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/screenshot-card-buttons.png)
 
-批量任务有进度面板，单个任务成功/失败都会弹提示：
-
-![批量进度面板](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/panel-batch.png)
+批量任务有进度面板，单个任务成功/失败都会弹提示。
 
 视频页右下角的下载按钮：
 
@@ -72,7 +71,8 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 
 脚本会申请：`GM_xmlhttpRequest`（跨域拉幻灯片图）、`GM_download`（批量下载，见下文「为什么批量下载要用 GM_download」）、
 `GM_setValue` / `GM_getValue`（缓存课件元数据）、`GM_addStyle`，以及
-`changjiang.yuketang.cn`、`yangtse-oplat.xuetangx.com`、`ali-cdn.xuetangx.com`、`xuetangx.com`、`yuketang.cn` 的连接权限。
+`changjiang.yuketang.cn`、`yangtse-oplat.xuetangx.com`、`ali-cdn.xuetangx.com`、`xuetangx.com`、`yuketang.cn`、
+`changjiang-private-qn.yuketang.cn`、`aliyuncs.com`（课堂课件与课堂录音放在签名 OSS 上，缺这条权限会被脚本猫直接拒绝）的连接权限。
 
 ---
 
@@ -80,13 +80,13 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 
 1. 打开课程「学习日志」页，等工具栏出现；
 2. 点 **批量下载** 弹出面板：
-   - 上面一排：`全选` / `全部 PPT` / `全部视频` / `全部课堂`，勾选会联动的（部分选中显示为半选）；
-   - 中间列表分三块：PPT 课件（带页数）、视频（带真实大小 + 所属章节）、课堂课件（带页数，默认不勾选，免得和第一块重复下载），每条左边有复选框，想下哪个勾哪个；
+   - 上面一排：`全选` / `PPT` / `视频` / `课堂` / `录音`，勾选会联动的（部分选中显示为半选）；
+   - 中间列表分四块：PPT 课件（带页数）、视频（带真实大小 + 所属章节）、课堂课件（带页数，**可能与PPT课件重复，默认不勾选**）、课堂录音（带时长，默认不勾选），每条左边有复选框，想下哪个勾哪个；
    - `PPT 格式` 下拉：PDF / ZIP（逐页图片）/ PPTX（图片版）；
    - 右下角 **开始下载**；**导出直链** 把视频直链导成 txt（原来工具栏上的「视频直链清单」已经收进这里）；
    - 底部汇总会写 `已选 13 项（PPT 6 · 视频 7） · 视频合计 584.87 MB`；
-3. 执行规则：选中的 PPT 先全部生成，**最后打包成一个 ZIP 下载一次**（只选了一个 PPT 时直接下那个文件，不套 ZIP）；
-   选中的视频按章节顺序逐个下载成 MP4；
+3. 执行规则：选中的课件（PPT + 课堂）先全部生成，**最后打包成一个 ZIP 下载一次**（只选了一份且不是 ZIP 模式时直接下那个文件，不套 ZIP）；
+   选中的视频按章节顺序逐个下载成 MP4，课堂录音逐个下载成 MP3；
 4. 只想要某一份，也可以直接点那一行卡片上的小按钮；
 5. 文件落在浏览器默认下载目录（Chrome/Edge 一般是 `~/Downloads`）。
 
@@ -176,6 +176,11 @@ PPT 格式在弹窗里选，选中的 PPT 仍然打成一个 ZIP。单课件按�
 不一定。很多课老师只投不讲义，不上传课件，那这节课的 PPT 就只能在「课堂」里拿到
 （走 `classroom-report/student/ppt` 接口，每页是签名 JPEG）。实测本课 7 节课堂里 6 节有课件，
 页数和课件版并不总相同（84 / 50 / 69 / 95 / 82 / 82）。
+
+**Q：课堂录音是什么？能听吗？**
+是那节课回放数据里的音频轨（`replay` 接口的 `live[0].url`，OSS 签名 mp3），
+实测一节课约 90 分钟、90MB 左右，能正常播放；它只是声音，不是上课录屏。
+没有录音源的课（如外请老师那节）会显示「无录音」并置灰。
 
 **Q：课件 ZIP 里怎么是 .jpg？**
 ZIP 输出就是逐页原图打包，方便单独取图；要整页排好版的用 PDF / PPTX。

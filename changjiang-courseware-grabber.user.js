@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         长江雨课堂 课件抓取助手
 // @namespace    https://github.com/qzhengpyuan/changjiang-course-grabber
-// @version      2.7.0
+// @version      2.7.1
 // @icon         https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-64.png
 // @icon64       https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-128.png
 // @homepageURL  https://github.com/qzhengpyuan/changjiang-course-grabber
@@ -28,6 +28,10 @@
 // @connect      ali-cdn.xuetangx.com
 // @connect      xuetangx.com
 // @connect      yuketang.cn
+// @connect      changjiang-private-qn.yuketang.cn
+// @connect      aliyuncs.com
+// @connect      yangtse-oplat.oss-cn-beijing.aliyuncs.com
+// @connect      qn-sfe.yuketang.cn
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -50,8 +54,8 @@
 
   const APP = "cjyk";
   const APP_NAME = "changjiang-courseware-grabber";
-  const VERSION = "2.0.0";
-  const STYLE_VERSION = "2.0.0";
+  const VERSION = "2.7.1";
+  const STYLE_VERSION = "2.7.1";
 
   const LOG_PAGE_LIMIT = 30;
   const SLIDE_CONCURRENCY = 3;
@@ -956,6 +960,19 @@
     return { info, presentationId: presentationIds[0], slides };
   }
 
+  // 同一节课在回放接口里还带一条音频轨（mp3，OSS 签名 URL）；录屏要老师开回放才有
+  async function fetchClassReplay(lessonId) {
+    const data = await fetchJson(`/api/v3/classroom-report/replay?lesson_id=${lessonId}&canFakeLive=1`);
+    if (data.code !== 0) throw new Error(data.msg || "课堂回放接口失败");
+    const info = data.data || {};
+    const live = (info.live || []).find((item) => item && item.url) || null;
+    return {
+      audioUrl: live ? live.url : "",
+      durationMs: info.lessonDuration || (live && live.duration) || 0,
+      showPlayback: info.showPlayback,
+    };
+  }
+
   // 课堂课件每页是签名 JPEG（changjiang-private-qn），同样要 credentials:"omit"
   async function collectClassSlides(lesson, reporter) {
     const { slides } = await fetchClassSlides(lesson.id);
@@ -1803,15 +1820,14 @@
     }
     // 课堂（上课那节）：每一节自带一套课件，和课程里上传的课件是两套东西
     const classes = [];
+    const audios = [];
     for (const activity of classActivities()) {
-      classes.push({
-        kind: "classppt",
-        id: String(activity.courseware_id),
-        title: (activity.title || "").trim() || "课堂",
-        meta: "课堂课件",
-      });
+      const title = (activity.title || "").trim() || "课堂";
+      const id = String(activity.courseware_id);
+      classes.push({ kind: "classppt", id, title, meta: "课堂课件" });
+      audios.push({ kind: "audio", id, title, meta: "课堂录音" });
     }
-    return { ppts, videos, classes };
+    return { ppts, videos, classes, audios };
   }
 
   function closeDialog(backdrop) {
@@ -1842,7 +1858,7 @@
       showToast(doc, `读取失败：${error.message}`, "error", 5000);
       return;
     }
-    if (!items.ppts.length && !items.videos.length && !items.classes.length) {
+    if (!items.ppts.length && !items.videos.length && !items.classes.length && !items.audios.length) {
       dialogOpening = false;
       delete doc.documentElement.dataset.cjykDialog;
       showToast(doc, "本课没有可下载的内容", "error");
@@ -1870,9 +1886,10 @@
         <h3 class="cjyk-modal-title">批量下载 · ${escapeHtml(currentCourseTitle())}</h3>
         <div class="cjyk-dl-toolbar">
           <label><input type="checkbox" data-role="all"> 全选</label>
-          <label><input type="checkbox" data-role="all-ppt"> 全部 PPT</label>
-          <label><input type="checkbox" data-role="all-video"> 全部视频</label>
-          <label><input type="checkbox" data-role="all-class"> 全部课堂</label>
+          <label title="全部 PPT 课件"><input type="checkbox" data-role="all-ppt"> PPT</label>
+          <label title="全部视频"><input type="checkbox" data-role="all-video"> 视频</label>
+          <label title="全部课堂课件"><input type="checkbox" data-role="all-class"> 课堂</label>
+          <label title="全部课堂录音"><input type="checkbox" data-role="all-audio"> 录音</label>
           <label class="cjyk-dl-format">PPT 格式
             <select data-role="format">${PPT_FORMATS.map((item) => `<option value="${item.id}">${item.label}</option>`).join("")}</select>
           </label>
@@ -1880,7 +1897,8 @@
         <div class="cjyk-dl-list">
           ${sectionHtml("PPT 课件", items.ppts, true)}
           ${sectionHtml("视频", items.videos, true)}
-          ${sectionHtml("课堂课件（上课时投的那套，默认不勾选）", items.classes, false)}
+          ${sectionHtml("课堂课件（可能与PPT课件重复，默认不勾选）", items.classes, false)}
+          ${sectionHtml("课堂录音（音频，默认不勾选）", items.audios, false)}
         </div>
         <div class="cjyk-dl-foot">
           <span class="cjyk-dl-summary" data-role="summary">未选择</span>
@@ -1898,6 +1916,7 @@
     const allPptBox = backdrop.querySelector('[data-role="all-ppt"]');
     const allVideoBox = backdrop.querySelector('[data-role="all-video"]');
     const allClassBox = backdrop.querySelector('[data-role="all-class"]');
+    const allAudioBox = backdrop.querySelector('[data-role="all-audio"]');
     const formatSelect = backdrop.querySelector('[data-role="format"]');
     const summary = backdrop.querySelector('[data-role="summary"]');
     const startButton = backdrop.querySelector('[data-role="start"]');
@@ -1907,14 +1926,16 @@
       const selected = boxes().filter((box) => box.checked);
       const pptSelected = selected.filter((box) => box.dataset.kind === "ppt").length;
       const classSelected = selected.filter((box) => box.dataset.kind === "classppt").length;
-      const videoSelected = selected.length - pptSelected - classSelected;
+      const audioSelected = selected.filter((box) => box.dataset.kind === "audio").length;
+      const videoSelected = selected.length - pptSelected - classSelected - audioSelected;
       const videoBytes = selected
         .filter((box) => box.dataset.kind === "video")
         .reduce((sum, box) => sum + (videoSizes.get(box.dataset.id) || 0), 0);
       const sizeText = videoBytes ? ` · 视频合计 ${formatBytes(videoBytes)}` : "";
       const classText = classSelected ? ` · 课堂课件 ${classSelected}` : "";
+      const audioText = audioSelected ? ` · 课堂录音 ${audioSelected}` : "";
       summary.textContent = selected.length
-        ? `已选 ${selected.length} 项（PPT ${pptSelected} · 视频 ${videoSelected}${classText}）${sizeText}`
+        ? `已选 ${selected.length} 项（PPT ${pptSelected} · 视频 ${videoSelected}${classText}${audioText}）${sizeText}`
         : "未选择";
       startButton.disabled = selected.length === 0;
       const pptBoxes = boxesOf("ppt");
@@ -1927,6 +1948,11 @@
       if (allClassBox) {
         allClassBox.checked = classBoxes.length > 0 && classBoxes.every((box) => box.checked);
         allClassBox.indeterminate = !allClassBox.checked && classBoxes.some((box) => box.checked);
+      }
+      const audioBoxes = boxesOf("audio");
+      if (allAudioBox) {
+        allAudioBox.checked = audioBoxes.length > 0 && audioBoxes.every((box) => box.checked);
+        allAudioBox.indeterminate = !allAudioBox.checked && audioBoxes.some((box) => box.checked);
       }
       allBox.checked = boxes().length > 0 && boxes().every((box) => box.checked);
       allBox.indeterminate = !allBox.checked && boxes().some((box) => box.checked);
@@ -1948,6 +1974,12 @@
     if (allClassBox) {
       allClassBox.addEventListener("change", () => {
         boxesOf("classppt").forEach((box) => { box.checked = allClassBox.checked; });
+        sync();
+      });
+    }
+    if (allAudioBox) {
+      allAudioBox.addEventListener("change", () => {
+        boxesOf("audio").forEach((box) => { box.checked = allAudioBox.checked; });
         sync();
       });
     }
@@ -1990,6 +2022,30 @@
       }
     });
 
+    // 课堂录音：每节课补「XX 分钟」，没有音频的直接禁用
+    const pendingAudio = boxesOf("audio").slice();
+    Array.from({ length: Math.min(2, pendingAudio.length) }, async () => {
+      while (pendingAudio.length) {
+        const box = pendingAudio.shift();
+        const row = box.closest(".cjyk-dl-row");
+        const metaNode = row && row.querySelector(".cjyk-dl-meta");
+        try {
+          const { audioUrl, durationMs } = await fetchClassReplay(box.dataset.id);
+          if (!audioUrl) {
+            if (metaNode) metaNode.textContent = "无录音";
+            box.disabled = true;
+            box.checked = false;
+          } else if (metaNode) {
+            const minutes = durationMs ? Math.round(durationMs / 60000) : 0;
+            metaNode.textContent = minutes ? `${minutes} 分钟` : "录音";
+          }
+          sync();
+        } catch (error) {
+          if (metaNode) metaNode.textContent = "读取失败";
+        }
+      }
+    });
+
     // 课堂课件：把每节课的页数补到行尾（没有课件的显示「无课件」）
     const pendingClass = boxesOf("classppt").slice();
     Array.from({ length: Math.min(2, pendingClass.length) }, async () => {
@@ -2022,6 +2078,7 @@
     const ppts = chosen.filter((item) => item.kind === "ppt");
     const classes = chosen.filter((item) => item.kind === "classppt");
     const videos = chosen.filter((item) => item.kind === "video");
+    const audios = chosen.filter((item) => item.kind === "audio");
     const pickedPpts = pptActivities().filter((activity) => ppts.some((item) => item.id === String(activity.courseware_id)));
     // 学习日志的课件和「课堂」自带课件走两套接口，这里合并成一个作业队列
     const deckJobs = [
@@ -2112,13 +2169,32 @@
         await sleep(400);
       }
 
+      let doneAudios = 0;
+      for (let index = 0; index < audios.length; index += 1) {
+        const item = audios[index];
+        const stage = `课堂录音 ${index + 1}/${audios.length}：${item.title}`;
+        reporter({ stage, current: index, total: audios.length, detail: "解析音频直链" });
+        try {
+          const { audioUrl, durationMs } = await fetchClassReplay(item.id);
+          if (!audioUrl) throw new Error("这节课没有录音");
+          const filename = makeUniqueFileName(`${sanitizeFileName(item.title)}_录音.mp3`, used);
+          const minutes = durationMs ? Math.round(durationMs / 60000) : 0;
+          reporter({ stage, current: index, total: audios.length, detail: `${filename}${minutes ? ` · ${minutes} 分钟` : ""}` });
+          await downloadVideoFile(audioUrl, filename, 0, null);
+          doneAudios += 1;
+        } catch (error) {
+          reporter({ stage, current: index + 1, total: audios.length, detail: `失败：${error.message}` });
+        }
+        await sleep(400);
+      }
+
       reporter({
         stage: "完成",
         current: chosen.length,
         total: chosen.length,
-        detail: `课件 ${deckJobs.length} 个（含课堂 ${classes.length}）· 视频 ${doneVideos}/${videos.length}`,
+        detail: `课件 ${deckJobs.length} 个（含课堂 ${classes.length}）· 视频 ${doneVideos}/${videos.length} · 录音 ${doneAudios}/${audios.length}`,
       });
-      showToast(doc, `批量下载结束：视频 ${doneVideos}/${videos.length}`, "success", 6000);
+      showToast(doc, `批量下载结束：视频 ${doneVideos}/${videos.length}，录音 ${doneAudios}/${audios.length}`, "success", 6000);
       panel.close(7000);
     } catch (error) {
       reporter({ stage: "失败", current: 0, total: 0, detail: error.message });
