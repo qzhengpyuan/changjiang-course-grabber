@@ -20,14 +20,17 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 | 位置 | 按钮 | 作用 |
 | --- | --- | --- |
 | 顶部工具栏 | 扫描课程 | 拉取课程日志 + 学习内容章节树，统计 PPT / 视频数量（并说明多出来的视频来自哪），把按钮挂到对应卡片上 |
-| 顶部工具栏 | **批量下载** | 弹出勾选面板：列出全部 PPT 与视频（视频带真实大小），逐条打勾；可选「全选 / 全部 PPT / 全部视频」，PPT 还能选输出格式；确认后一次跑完 |
+| 顶部工具栏 | **批量下载** | 弹出勾选面板：列出全部 PPT、视频与课堂课件（视频带真实大小、课堂课件带页数），逐条打勾；可选「全选 / 全部 PPT / 全部视频 / 全部课堂」，PPT 还能选输出格式；确认后一次跑完 |
 | 课件卡片 | PDF / 图片ZIP / PPTX | 单个课件导出 |
+| 课堂卡片 | 课件PDF / 课件ZIP / 课件PPTX | 导出**那节课上课时投出来的课件**（含老师没上传到课程里的课） |
 | 视频卡片 | 视频 / 直链 | 下载该视频 MP4 / 复制直链到剪贴板 |
 | 视频页（右下角） | 下载 MP4 | 在学习空间视频页直接下载当前视频 |
 
 批量下载面板长这样（勾选要下的条目，视频行尾是真实文件大小，底部实时汇总已选视频总量；PPT 格式在右上角下拉框里选）：
 
-![批量下载面板](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/dialog-batch.png)
+![批量下载面板](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/dialog-v27.png)
+
+（截图里的课程名与课件名已打码；`课堂课件` 那一块就是上课时投出来的那套，页数自动补齐，没课件的课会置灰）
 
 ![工具栏按钮](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/toolbar-v25.png)
 
@@ -77,8 +80,8 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 
 1. 打开课程「学习日志」页，等工具栏出现；
 2. 点 **批量下载** 弹出面板：
-   - 上面一排：`全选` / `全部 PPT` / `全部视频`，勾选会联动的（部分选中显示为半选）；
-   - 中间列表：PPT 课件（带页数）和视频（带真实大小 + 所属章节），每条左边有复选框，想下哪个勾哪个；
+   - 上面一排：`全选` / `全部 PPT` / `全部视频` / `全部课堂`，勾选会联动的（部分选中显示为半选）；
+   - 中间列表分三块：PPT 课件（带页数）、视频（带真实大小 + 所属章节）、课堂课件（带页数，默认不勾选，免得和第一块重复下载），每条左边有复选框，想下哪个勾哪个；
    - `PPT 格式` 下拉：PDF / ZIP（逐页图片）/ PPTX（图片版）；
    - 右下角 **开始下载**；**导出直链** 把视频直链导成 txt（原来工具栏上的「视频直链清单」已经收进这里）；
    - 底部汇总会写 `已选 13 项（PPT 6 · 视频 7） · 视频合计 584.87 MB`；
@@ -93,7 +96,9 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 | --- | --- | --- |
 | PPT 课件 | 学习日志 + 学习内容章节树 | 两路合并去重；章节树里日志没列到的 PPT 也会出现（`leaf_info.content_info.leaf_type_id` 就是下载要用的 `courseware_id`） |
 | 视频 | 学习内容章节树 | 日志里只列了一部分，章节树才是全集（实测 3 vs 7） |
-| 作业 / 课堂 | 不列 | 作业是提交型没有附件；课堂（直播回放）学生端 `/v2/web/playback` 跳 `forbidden`，`leaf_info` 里 `media` 为空，拿不到 |
+| 课堂课件 | 学习日志里 type=14 的「课堂」条目 | `lesson-info` 给 `presentationIds`，`student/ppt` 给每页签名图；这节课没有课件时显示「无课件」并禁用 |
+| 作业 | 不列 | 作业是提交型，没有可下载附件 |
+| 课堂录屏回放 | 不列 | 老师没开回放时 `showPlayback=0`、`/v2/web/playback` 跳 `forbidden`，`record` 为空，拿不到；开了回放以后才能加 |
 
 > 为什么日志里只有 3 个视频、批量下载却列出了 7 个？
 > 「学习日志」只列出老师发布到日志流里的活动；「学习内容」是按章节组织的完整课程树，
@@ -163,8 +168,14 @@ PPT 格式在弹窗里选，选中的 PPT 仍然打成一个 ZIP。单课件按�
 再高只能拿原始 pptx，见上面「输出格式」一节。
 
 **Q：课堂回放（直播回看）能抓吗？**
-学生端没有权限：`/v2/web/playback/{lesson_id}` 会跳 `/v2/web/forbidden`，
-需要教师在课程里开启回放后才有内容。
+看老师开没开。`/api/v3/classroom-report/replay?lesson_id=...` 里 `showPlayback=0`、`record` 为空时，
+`/v2/web/playback/{lesson_id}` 会跳 `/v2/web/forbidden`，学生端没有任何可下载的录屏。
+（同一个接口里 `live[0].url` 是这节课的音频轨道 mp3，能取到，本脚本暂未做下载入口。）
+
+**Q：「课堂」里上课时投的 PPT 和「PPT 课件」里的是同一份吗？**
+不一定。很多课老师只投不讲义，不上传课件，那这节课的 PPT 就只能在「课堂」里拿到
+（走 `classroom-report/student/ppt` 接口，每页是签名 JPEG）。实测本课 7 节课堂里 6 节有课件，
+页数和课件版并不总相同（84 / 50 / 69 / 95 / 82 / 82）。
 
 **Q：课件 ZIP 里怎么是 .jpg？**
 ZIP 输出就是逐页原图打包，方便单独取图；要整页排好版的用 PDF / PPTX。
@@ -182,6 +193,9 @@ ZIP 输出就是逐页原图打包，方便单独取图；要整页排好版的�
 | 课件分页 | `GET /v2/api/web/cards/detlist/{courseware_id}?classroom_id={cid}` → `Slides[].Cover`、`Width/Height`、`ppt_file_id` |
 | 视频信息 | `GET /mooc-api/v1/lms/learn/leaf_info/{cid}/{leaf_id}/?classroom_id={cid}` → `content_info.media.ccid` |
 | 视频直链 | `GET /api/open/audiovideo/playurl?video_id={ccid}&provider=cc&file_type=1&is_single=0&domain=changjiang.yuketang.cn` → `playurl.sources.quality20/quality10` |
+| 课堂基本信息 | `GET /api/v3/classroom-report/student/lesson-info?lesson_id={lesson_id}` → `presentationIds[]`、`showPlayback` |
+| 课堂课件分页 | `GET /api/v3/classroom-report/student/ppt?lesson_id={lesson_id}&presentationId={pid}` → `slideList[].cover`（带 token 的签名 JPEG，1280×960） |
+| 课堂回放/录音 | `GET /api/v3/classroom-report/replay?lesson_id={lesson_id}&canFakeLive=1` → `live[0].url`（音频 mp3）、`record`、`showPlayback` |
 
 三个踩过的坑：
 
