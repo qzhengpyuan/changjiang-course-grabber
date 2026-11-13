@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         长江雨课堂 课件抓取助手
 // @namespace    https://github.com/qzhengpyuan/changjiang-course-grabber
-// @version      2.9.1
+// @version      2.9.2
 // @icon         https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-64.png
 // @icon64       https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-128.png
 // @homepageURL  https://github.com/qzhengpyuan/changjiang-course-grabber
@@ -56,8 +56,8 @@
 
   const APP = "cjyk";
   const APP_NAME = "changjiang-courseware-grabber";
-  const VERSION = "2.9.1";
-  const STYLE_VERSION = "2.9.1";
+  const VERSION = "2.9.2";
+  const STYLE_VERSION = "2.9.2";
 
   const LOG_PAGE_LIMIT = 30;
   const SLIDE_CONCURRENCY = 3;
@@ -189,19 +189,7 @@
     .cjyk-btn-secondary { background: #fff !important; color: #1b2733 !important; border-color: #c4d2ec; }
     .cjyk-btn-secondary:hover { background: #eef4ff !important; }
     .cjyk-btn-small { min-width: 42px; height: 22px; padding: 0 7px; font-size: 11px; }
-    .cjyk-actions-inline { margin-left: 8px; position: relative; }
-    /* 完整模式下次要按钮平时不占位，鼠标移到卡片上才浮出来（不挤压「学习进度」） */
-    .cjyk-extra {
-      display: none; position: absolute; right: 100%; top: 50%; transform: translateY(-50%);
-      margin-right: 6px; padding: 3px 5px; gap: 6px; align-items: center;
-      /* Canvas 跟随站点深浅色主题，避免深色主题下露出半透明底色 */
-      background: Canvas !important; border: 1px solid rgba(140,155,175,.35); border-radius: 6px;
-      box-shadow: 0 2px 10px rgba(0,0,0,.16);
-      white-space: nowrap; z-index: 6;
-    }
-    .activity-box:hover .cjyk-extra,
-    .cjyk-extra:hover,
-    .cjyk-actions-inline:focus-within .cjyk-extra { display: inline-flex; }
+    .cjyk-actions-inline { margin-left: 8px; }
 
     .cjyk-progress {
       position: fixed; right: 18px; bottom: 18px; z-index: 2147483000;
@@ -1303,8 +1291,9 @@
     return null;
   }
 
-  // 在每条课件/视频卡片右侧挂按钮（对应参考项目 ensureActionButton）
-  // 按钮数量受设置控制：full=全部格式/直链，compact=每类一个主按钮，off=不挂
+  // 在每条课件/视频/课堂卡片右侧挂按钮（对应参考项目 ensureActionButton）
+  // 精简：每张卡片只有一个「下载」，课堂也只下课件，不带录音
+  // 完整：全部按钮平铺，格式/直链/录音都直接放出来，不折叠不悬停
   function buildCardActions(doc, activity) {
     const holder = doc.createElement("span");
     holder.className = "cjyk-actions cjyk-actions-inline";
@@ -1313,26 +1302,36 @@
 
     const primaryFormat = settings.pptFormat;
     const small = "cjyk-btn-small";
-    const secondary = "cjyk-btn-small cjyk-btn-secondary";
+    const secondary = "cjyk-btn-secondary cjyk-btn-small";
+
+    if (mode === "compact") {
+      // 统一一个词：下载。格式取设置里的默认格式
+      const downloadButton = createButton(doc, "下载", small);
+      if (activity.type === 14) {
+        downloadButton.title = `下载课堂课件（${pptFormatLabel(primaryFormat)}）`;
+        downloadButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          handleClassPpt(doc, activity, primaryFormat, downloadButton);
+        });
+      } else if (activity.type === 2) {
+        downloadButton.title = `下载课件（${pptFormatLabel(primaryFormat)}）`;
+        downloadButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          handlePpt(doc, activity, primaryFormat, downloadButton);
+        });
+      } else {
+        downloadButton.title = "下载视频 MP4";
+        downloadButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          handleVideo(doc, activity, downloadButton);
+        });
+      }
+      holder.append(downloadButton);
+      return holder;
+    }
 
     if (activity.type === 14) {
-      // 课堂：上课时投的那套课件 + 那节课的录音
-      if (mode === "compact") {
-        const deckButton = createButton(doc, "课件", small);
-        deckButton.title = `下载课堂课件（${pptFormatLabel(primaryFormat)}）`;
-        deckButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          handleClassPpt(doc, activity, primaryFormat, deckButton);
-        });
-        const audioButton = createButton(doc, "录音", small);
-        audioButton.title = "下载这节课的录音（mp3，不是录屏）";
-        audioButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          handleClassAudio(doc, activity, audioButton);
-        });
-        holder.append(deckButton, audioButton);
-        return holder;
-      }
+      // 课堂：上课时投的那套课件（三种封装）+ 那节课的录音（mp3 / 签名直链）
       const pdfButton = createButton(doc, "课件PDF", small);
       pdfButton.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -1360,24 +1359,11 @@
         event.stopPropagation();
         copyAudioLink(doc, activity);
       });
-      const extra = doc.createElement("span");
-      extra.className = "cjyk-extra";
-      extra.append(zipButton, pptxButton, audioButton, audioLinkButton);
-      holder.append(pdfButton, extra);
+      holder.append(pdfButton, zipButton, pptxButton, audioButton, audioLinkButton);
       return holder;
     }
 
     if (activity.type === 2) {
-      if (mode === "compact") {
-        const downloadButton = createButton(doc, "下载", small);
-        downloadButton.title = `下载课件（${pptFormatLabel(primaryFormat)}）`;
-        downloadButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          handlePpt(doc, activity, primaryFormat, downloadButton);
-        });
-        holder.append(downloadButton);
-        return holder;
-      }
       const pdfButton = createButton(doc, "PDF", small);
       pdfButton.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -1393,31 +1379,22 @@
         event.stopPropagation();
         handlePpt(doc, activity, "pptx", pptxButton);
       });
-      const extra = doc.createElement("span");
-      extra.className = "cjyk-extra";
-      extra.append(zipButton, pptxButton);
-      holder.append(pdfButton, extra);
+      holder.append(pdfButton, zipButton, pptxButton);
       return holder;
     }
 
     // 视频
-    const videoButton = createButton(doc, mode === "compact" ? "下载" : "视频", small);
+    const videoButton = createButton(doc, "视频", small);
     videoButton.addEventListener("click", (event) => {
       event.stopPropagation();
       handleVideo(doc, activity, videoButton);
     });
-    holder.append(videoButton);
-    if (mode !== "compact") {
-      const linkButton = createButton(doc, "直链", secondary);
-      linkButton.addEventListener("click", (event) => {
-        event.stopPropagation();
-        copyVideoLink(doc, activity);
-      });
-      const extra = doc.createElement("span");
-      extra.className = "cjyk-extra";
-      extra.append(linkButton);
-      holder.append(extra);
-    }
+    const linkButton = createButton(doc, "直链", secondary);
+    linkButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      copyVideoLink(doc, activity);
+    });
+    holder.append(videoButton, linkButton);
     return holder;
   }
 
@@ -2222,8 +2199,8 @@
 
           <div class="cjyk-set-group">
             <div class="cjyk-set-group-title">卡片按钮</div>
-            <label class="cjyk-set-row"><input type="radio" name="cjyk-cardmode" value="full"${settings.cardButtons === "full" ? " checked" : ""}> 完整：每种格式一个按钮</label>
-            <label class="cjyk-set-row"><input type="radio" name="cjyk-cardmode" value="compact"${settings.cardButtons === "compact" ? " checked" : ""}> 精简：每类一个按钮，格式跟上面的默认值</label>
+            <label class="cjyk-set-row"><input type="radio" name="cjyk-cardmode" value="full"${settings.cardButtons === "full" ? " checked" : ""}> 完整：所有按钮平铺（课件三种格式、录音、直链）</label>
+            <label class="cjyk-set-row"><input type="radio" name="cjyk-cardmode" value="compact"${settings.cardButtons === "compact" ? " checked" : ""}> 精简：每张卡片只有一个「下载」，格式跟上面的默认值</label>
             <label class="cjyk-set-row"><input type="radio" name="cjyk-cardmode" value="off"${settings.cardButtons === "off" ? " checked" : ""}> 关闭：只从「批量下载」里下</label>
           </div>
 
