@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         长江雨课堂 课件抓取助手
 // @namespace    https://github.com/qzhengpyuan/changjiang-course-grabber
-// @version      2.5.1
+// @version      2.6.0
 // @icon         https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-64.png
 // @icon64       https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-128.png
 // @homepageURL  https://github.com/qzhengpyuan/changjiang-course-grabber
@@ -1078,9 +1078,6 @@
     batchButton.addEventListener("click", () => openDownloadDialog(doc));
     toolbar.appendChild(batchButton);
 
-    const linkButton = createButton(doc, "视频直链清单", "cjyk-btn-secondary");
-    linkButton.addEventListener("click", () => handleVideoList(doc, linkButton));
-    toolbar.appendChild(linkButton);
 
     if (anchor === doc.body) {
       toolbar.style.position = "fixed";
@@ -1351,91 +1348,6 @@
     return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
   }
 
-  // 批量：先把整门课的所有课件都生成好，最后**打包成一个 zip 下载一次**。
-  // 这样既不会触发浏览器的「一次点击多个下载」限制，也符合参考项目（学习通抓取助手）的做法。
-  async function handleBatch(doc, mode, button) {
-    if (state.busy) {
-      showToast(doc, "已有任务在进行中", "error");
-      return;
-    }
-    const restore = setButtonBusy(button, "准备中");
-    const label = MODE_LABEL[mode] || "PDF";
-    const panel = createProgressPanel(doc, `全课 PPT → ${label}（打包）`);
-    const reporter = createProgressReporter(button, panel);
-    const used = new Set();
-    try {
-      await ensureActivities(doc, reporter);
-      const list = pptActivities();
-      if (!list.length) {
-        showToast(doc, "本课没有 PPT 课件", "error");
-        return;
-      }
-
-      const entries = [];
-      let ok = 0;
-      for (let index = 0; index < list.length; index += 1) {
-        const activity = list[index];
-        const safeTitle = sanitizeFileName(activity.title) || `课件${index + 1}`;
-        reporter({ stage: `(${index + 1}/${list.length}) ${activity.title}`, current: index, total: list.length, detail: "" });
-        try {
-          const { pages, meta } = await collectSlides(activity, (progress) => {
-            reporter({
-              stage: `(${index + 1}/${list.length}) ${activity.title}`,
-              current: progress.current,
-              total: progress.total,
-              detail: progress.detail,
-            });
-          });
-          if (mode === "zip") {
-            // 图片模式：把所有课件的逐页图片放进同一个 zip 的不同目录
-            for (const page of pages) {
-              entries.push({
-                path: `${safeTitle}/${String(page.pageIndex).padStart(3, "0")}.jpg`,
-                data: new Uint8Array(page.buffer),
-              });
-            }
-          } else {
-            const { blob } = await buildPptOutput(activity, pages, meta, mode, null);
-            entries.push({
-              path: `${safeTitle}.${mode === "pptx" ? "pptx" : "pdf"}`,
-              data: new Uint8Array(await blob.arrayBuffer()),
-            });
-          }
-          ok += 1;
-          reporter({ stage: `(${index + 1}/${list.length}) 完成`, current: index + 1, total: list.length, detail: `${safeTitle} · ${pages.length} 页` });
-        } catch (error) {
-          reporter({ stage: `(${index + 1}/${list.length}) 跳过`, current: index + 1, total: list.length, detail: error.message });
-        }
-      }
-
-      if (!entries.length) throw new Error("没有生成任何文件");
-
-      reporter({ stage: "打包压缩包", current: 0, total: entries.length, detail: `${entries.length} 个文件` });
-      const zipBlob = await createStoredZipBlob(entries, (current, total, detail) => {
-        reporter({ stage: "打包压缩包", current, total, detail });
-      });
-      const filename = makeUniqueFileName(
-        `${sanitizeFileName(currentCourseTitle())}_${label}_${timestampForName()}.zip`,
-        used
-      );
-      triggerBlobDownload(doc, zipBlob, filename);
-      reporter({ stage: "已下载", current: entries.length, total: entries.length, detail: `${filename} ${formatBytes(zipBlob.size)}` });
-      showToast(
-        doc,
-        `已打包 ${ok}/${list.length} 个课件 → ${filename}（${formatBytes(zipBlob.size)}）`,
-        ok === list.length ? "success" : "info",
-        6000
-      );
-      panel.close(8000);
-    } catch (error) {
-      reporter({ stage: "失败", current: 0, total: 0, detail: error.message });
-      showToast(doc, `失败：${error.message}`, "error", 5000);
-    } finally {
-      state.busy = false;
-      restore();
-    }
-  }
-
   /* ------------------------------------------------------------------ */
   /* 视频                                                                */
   /* ------------------------------------------------------------------ */
@@ -1590,95 +1502,6 @@
     }
   }
 
-  // 整门课的视频逐个下载（学习内容章节树为准，日志兜底）
-  async function handleAllVideos(doc, button) {
-    if (state.busy) {
-      showToast(doc, "已有任务在进行中", "error");
-      return;
-    }
-    const restore = setButtonBusy(button, "准备中");
-    const panel = createProgressPanel(doc, "全课视频 → MP4");
-    const reporter = createProgressReporter(button, panel);
-    const used = new Set();
-    try {
-      let list = [];
-      try {
-        const leaves = await ensureChapterLeaves(reporter);
-        list = leaves.filter((leaf) => leaf.leaf_type === 0 && leaf.id);
-      } catch (error) {
-        console.warn(`[${APP}] 章节树读取失败，退回学习日志`, error);
-      }
-      if (!list.length) {
-        await ensureActivities(doc, reporter);
-        list = videoActivities().map((activity) => ({
-          name: activity.title,
-          id: activity.content && activity.content.leaf_id,
-        }));
-      }
-      if (!list.length) {
-        showToast(doc, "本课没有视频", "error");
-        return;
-      }
-
-      const jobs = [];
-      let totalBytes = 0;
-      for (let index = 0; index < list.length; index += 1) {
-        const leaf = list[index];
-        const name = leaf.name;
-        const leafId = leaf.id;
-        reporter({ stage: `(${index + 1}/${list.length}) 解析 ${name}`, current: index, total: list.length, detail: "" });
-        try {
-          const info = await fetchVideoInfo(leafId);
-          if (!info.ccid) throw new Error("未取到视频 ID");
-          const urls = await fetchVideoUrls(info.ccid);
-          if (!urls.primary) throw new Error("没有可用直链");
-          jobs.push({ name: info.name || name, url: urls.primary, size: info.size || 0 });
-          totalBytes += info.size || 0;
-        } catch (error) {
-          console.warn(`[${APP}] ${name} 解析失败`, error);
-        }
-      }
-      if (!jobs.length) throw new Error("没有可下载的视频");
-
-      const ok = new Set();
-      for (let index = 0; index < jobs.length; index += 1) {
-        const job = jobs[index];
-        const filename = makeUniqueFileName(`${sanitizeFileName(job.name)}.mp4`, used);
-        reporter({
-          stage: `(${index + 1}/${jobs.length}) ${job.name}`,
-          current: index,
-          total: jobs.length,
-          detail: `${formatBytes(job.size)} · 共 ${formatBytes(totalBytes)}`,
-        });
-        try {
-          await downloadVideoFile(job.url, filename, job.size, (progress) => {
-            const loaded = (progress && progress.loaded) || 0;
-            const total = (progress && progress.total) || job.size || 0;
-            reporter({
-              stage: `(${index + 1}/${jobs.length}) ${job.name}`,
-              current: index,
-              total: jobs.length,
-              detail: `${formatBytes(loaded)} / ${formatBytes(total)}`,
-            });
-          });
-          ok.add(job.name);
-          reporter({ stage: `(${index + 1}/${jobs.length}) 完成`, current: index + 1, total: jobs.length, detail: filename });
-        } catch (error) {
-          reporter({ stage: `(${index + 1}/${jobs.length}) 失败`, current: index + 1, total: jobs.length, detail: error.message });
-        }
-        await sleep(500);
-      }
-      showToast(doc, `视频下载：${ok.size}/${jobs.length}（共 ${formatBytes(totalBytes)}）`, ok.size === jobs.length ? "success" : "info", 6000);
-      panel.close(6000);
-    } catch (error) {
-      reporter({ stage: "失败", current: 0, total: 0, detail: error.message });
-      showToast(doc, `失败：${error.message}`, "error", 5000);
-    } finally {
-      state.busy = false;
-      restore();
-    }
-  }
-
   /* ------------------------------------------------------------------ */
   /* 扫描                                                                */
   /* ------------------------------------------------------------------ */
@@ -1770,16 +1593,63 @@
     { id: "pptx", label: "PPTX（图片版，可放映/批注）" },
   ];
 
-  // 汇总「可下载的东西」：学习日志里的 PPT + 学习内容章节树里的视频（日志兜底）
+  // 用 HEAD 拿真实文件大小（CDN 带 ACAO:*，GM_xmlhttpRequest 不受跨域限制）
+  function fetchHeadSize(url) {
+    return new Promise((resolve) => {
+      if (typeof GM_xmlhttpRequest !== "function") {
+        resolve(null);
+        return;
+      }
+      try {
+        GM_xmlhttpRequest({
+          method: "HEAD",
+          url,
+          timeout: 15000,
+          onload: (response) => {
+            const match = /content-length:\s*(\d+)/i.exec(response.responseHeaders || "");
+            resolve(match ? Number(match[1]) : null);
+          },
+          onerror: () => resolve(null),
+          ontimeout: () => resolve(null),
+        });
+      } catch (error) {
+        resolve(null);
+      }
+    });
+  }
+
+  // 视频真实大小：leaf_info 拿 ccid → playurl 拿直链 → HEAD 取 content-length
+  async function resolveVideoSize(leafId) {
+    try {
+      const info = await fetchVideoInfo(leafId);
+      let size = 0;
+      if (info.ccid) {
+        const urls = await fetchVideoUrls(info.ccid);
+        if (urls.primary) size = (await fetchHeadSize(urls.primary)) || 0;
+      }
+      return { size: size || info.size || 0, approx: !size };
+    } catch (error) {
+      return { size: 0, approx: true };
+    }
+  }
+
+  // 汇总「可下载的东西」：学习日志里的 PPT + 学习内容章节树里的 PPT 与视频
+  // 章节树里的 PPT 只有 leaf id，真正下载要用的 courseware_id 在 leaf_info.content_info.leaf_type_id
   async function collectDownloadItems(reporter) {
     const ppts = [];
     const videos = [];
+    const seenPpt = new Set();
+    const titles = new Set();
     try {
       await ensureActivities(null, reporter);
       for (const activity of pptActivities()) {
+        const id = String(activity.courseware_id);
+        if (seenPpt.has(id)) continue;
+        seenPpt.add(id);
+        titles.add((activity.title || "").trim());
         ppts.push({
           kind: "ppt",
-          id: String(activity.courseware_id),
+          id,
           title: activity.title,
           meta: activity.count ? `${activity.count} 页` : "PPT 课件",
         });
@@ -1789,6 +1659,27 @@
     }
     try {
       const leaves = await ensureChapterLeaves(reporter);
+      // 章节树里日志没列到的 PPT（学习内容独有的那些）
+      const extraPptLeaves = leaves.filter(
+        (leaf) => leaf.leaf_type === 7 && leaf.id && !titles.has((leaf.name || "").trim())
+      );
+      for (const leaf of extraPptLeaves) {
+        try {
+          const data = await fetchJson(`/mooc-api/v1/lms/learn/leaf_info/${classroomId}/${leaf.id}/?classroom_id=${classroomId}`);
+          const content = (data.data && data.data.content_info) || {};
+          const coursewareId = content.leaf_type_id ? String(content.leaf_type_id) : "";
+          if (!coursewareId || seenPpt.has(coursewareId)) continue;
+          seenPpt.add(coursewareId);
+          ppts.push({
+            kind: "ppt",
+            id: coursewareId,
+            title: leaf.name,
+            meta: leaf.chapter || "PPT 课件",
+          });
+        } catch (error) {
+          console.warn(`[${APP}] ${leaf.name} 读取失败`, error);
+        }
+      }
       for (const leaf of leaves) {
         if (leaf.leaf_type === 0 && leaf.id) {
           videos.push({ kind: "video", id: String(leaf.id), title: leaf.name, meta: leaf.chapter || "视频" });
@@ -1895,12 +1786,17 @@
     const summary = backdrop.querySelector('[data-role="summary"]');
     const startButton = backdrop.querySelector('[data-role="start"]');
 
+    const videoSizes = new Map();
     const sync = () => {
       const selected = boxes().filter((box) => box.checked);
       const pptSelected = selected.filter((box) => box.dataset.kind === "ppt").length;
       const videoSelected = selected.length - pptSelected;
+      const videoBytes = selected
+        .filter((box) => box.dataset.kind === "video")
+        .reduce((sum, box) => sum + (videoSizes.get(box.dataset.id) || 0), 0);
+      const sizeText = videoBytes ? ` · 视频合计 ${formatBytes(videoBytes)}` : "";
       summary.textContent = selected.length
-        ? `已选 ${selected.length} 项（PPT ${pptSelected} · 视频 ${videoSelected}）`
+        ? `已选 ${selected.length} 项（PPT ${pptSelected} · 视频 ${videoSelected}）${sizeText}`
         : "未选择";
       startButton.disabled = selected.length === 0;
       const pptBoxes = boxesOf("ppt");
@@ -1948,6 +1844,22 @@
     sync();
     dialogOpening = false;
     delete doc.documentElement.dataset.cjykDialog;
+
+    // 后台把每个视频的真实大小补到行尾（并发 3 个，不阻塞弹窗出现）
+    const pending = boxesOf("video").slice();
+    Array.from({ length: Math.min(3, pending.length) }, async () => {
+      while (pending.length) {
+        const box = pending.shift();
+        const row = box.closest(".cjyk-dl-row");
+        const metaNode = row && row.querySelector(".cjyk-dl-meta");
+        const base = metaNode ? metaNode.textContent : "";
+        const { size, approx } = await resolveVideoSize(box.dataset.id);
+        if (!size) continue;
+        videoSizes.set(box.dataset.id, size);
+        if (metaNode) metaNode.textContent = `${approx ? "≈" : ""}${formatBytes(size)} · ${base}`;
+        sync();
+      }
+    });
   }
 
   // 按对话框里勾选的结果执行：PPT 先全部生成再打一个包，视频逐个下载
