@@ -22,6 +22,8 @@
 // @grant        GM_download
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_deleteValue
+// @grant        GM_listValues
 // @grant        GM_addStyle
 // @connect      changjiang.yuketang.cn
 // @connect      yangtse-oplat.xuetangx.com
@@ -54,8 +56,8 @@
 
   const APP = "cjyk";
   const APP_NAME = "changjiang-courseware-grabber";
-  const VERSION = "2.8.0";
-  const STYLE_VERSION = "2.8.0";
+  const VERSION = "2.9.0";
+  const STYLE_VERSION = "2.9.0";
 
   const LOG_PAGE_LIMIT = 30;
   const SLIDE_CONCURRENCY = 3;
@@ -64,6 +66,88 @@
   const ZIP_MAX_FILE_COUNT = 400;
   const ZIP_MAX_TOTAL_BYTES = 400 * 1024 * 1024;
   const VIDEO_QUALITY_ORDER = ["quality20", "quality10"];
+
+  // 下载设置（持久偏好）：批量弹窗只是本次任务，打开时以这里的值为初值
+  const SETTINGS_KEY = `${APP}:settings:v1`;
+  const DEFAULT_SETTINGS = {
+    pptFormat: "pdf",              // 默认课件格式：pdf / zip / pptx
+    selectedKinds: {               // 批量弹窗打开时默认勾选哪几类
+      ppt: true,
+      video: true,
+      classppt: false,
+      audio: false,
+    },
+    saveAs: false,                 // 下载前询问保存位置
+    mediaConcurrency: 1,           // 视频/录音同时下载数
+    cardButtons: "compact",        // 卡片按钮：full / compact / off
+  };
+  const CARD_BUTTON_MODES = ["full", "compact", "off"];
+
+  function cloneSettings(source) {
+    const base = source || {};
+    return {
+      pptFormat: base.pptFormat || DEFAULT_SETTINGS.pptFormat,
+      selectedKinds: { ...DEFAULT_SETTINGS.selectedKinds, ...(base.selectedKinds || {}) },
+      saveAs: !!base.saveAs,
+      mediaConcurrency: Math.max(1, Math.min(3, Number(base.mediaConcurrency) || 1)),
+      cardButtons: CARD_BUTTON_MODES.includes(base.cardButtons) ? base.cardButtons : DEFAULT_SETTINGS.cardButtons,
+    };
+  }
+
+  let settings = cloneSettings(null);
+
+  async function loadSettings() {
+    try {
+      if (typeof GM_getValue !== "function") return;
+      const raw = await Promise.resolve(GM_getValue(SETTINGS_KEY, null));
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      settings = cloneSettings(parsed);
+    } catch (error) {
+      console.warn(`[${APP}] 读取设置失败，使用默认值`, error);
+    }
+  }
+
+  async function saveSettings(patch) {
+    settings = cloneSettings({ ...settings, ...patch, selectedKinds: { ...settings.selectedKinds, ...((patch || {}).selectedKinds || {}) } });
+    try {
+      if (typeof GM_setValue === "function") await Promise.resolve(GM_setValue(SETTINGS_KEY, JSON.stringify(settings)));
+    } catch (error) {
+      console.warn(`[${APP}] 保存设置失败`, error);
+    }
+    return settings;
+  }
+
+  function kindsLabel(kinds) {
+    const picked = [];
+    if (kinds.ppt) picked.push("PPT");
+    if (kinds.video) picked.push("视频");
+    if (kinds.classppt) picked.push("课堂");
+    if (kinds.audio) picked.push("录音");
+    return picked.length ? `默认勾选 ${picked.join("+")}` : "默认都不勾";
+  }
+
+  function pptFormatLabel(id) {
+    const hit = PPT_FORMATS.find((item) => item.id === id);
+    return hit ? hit.label : id;
+  }
+
+  // 并发跑一批任务（视频/录音同时下几个由设置决定）
+  async function runPool(items, limit, worker) {
+    const queue = items.slice();
+    const size = Math.max(1, Math.min(limit || 1, queue.length || 1));
+    const runners = Array.from({ length: size }, async () => {
+      while (queue.length) {
+        const item = queue.shift();
+        const index = items.indexOf(item);
+        try {
+          await worker(item, index);
+        } catch (error) {
+          console.warn(`[${APP}] 任务失败`, error);
+        }
+      }
+    });
+    await Promise.all(runners);
+  }
 
   const OWN_SELECTOR = [
     ".cjyk-toolbar",
@@ -158,6 +242,31 @@
     .cjyk-dl-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cjyk-dl-meta { color: #8493a8; font-size: 11px; white-space: nowrap; }
     .cjyk-dl-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; gap: 10px; }
+    .cjyk-dl-hint { color: #64748b; font-size: 11px; }
+    .cjyk-dl-hint-link {
+      border: none; background: transparent; color: #2f7df6; font-size: 11px; cursor: pointer; padding: 0;
+      text-decoration: underline; font-family: inherit;
+    }
+
+    .cjyk-set-modal { width: min(520px, 94vw); max-height: 90vh; display: flex; flex-direction: column; }
+    .cjyk-set-body { overflow: auto; padding-right: 2px; }
+    .cjyk-set-group { border: 1px solid #e6ecf6; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+    .cjyk-set-group-title { font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 8px; }
+    .cjyk-set-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #1b2733; padding: 4px 0; cursor: pointer; }
+    .cjyk-set-row select { padding: 2px 4px; border: 1px solid #cfd8e6; border-radius: 4px; background: #fff; color: #1b2733; font-size: 12px; }
+    .cjyk-set-kinds { flex-wrap: wrap; }
+    .cjyk-set-kinds label { display: inline-flex; align-items: center; gap: 4px; }
+    .cjyk-set-row input[type="checkbox"], .cjyk-set-row input[type="radio"], .cjyk-set-kinds input[type="checkbox"] {
+      appearance: auto; -webkit-appearance: checkbox; width: 14px; height: 14px; min-width: 14px; margin: 0; accent-color: #2f7df6; cursor: pointer;
+    }
+    .cjyk-set-row input[type="radio"], .cjyk-set-row input[type="radio"] { -webkit-appearance: radio; }
+    .cjyk-set-note { font-size: 11px; color: #8493a8; margin-top: 4px; }
+    .cjyk-set-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .cjyk-set-log {
+      margin: 8px 0 0; padding: 8px 10px; max-height: 180px; overflow: auto; border-radius: 6px;
+      background: #f6f8fc; border: 1px solid #e6ecf6; color: #334155;
+      font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all;
+    }
     .cjyk-dl-actions { display: flex; gap: 8px; }
     .cjyk-dl-summary { color: #64748b; font-size: 12px; }
   `;
@@ -652,7 +761,7 @@
         const ret = GM_download({
           url,
           name: filename,
-          saveAs: false,
+          saveAs: !!settings.saveAs,
           onerror: () => {
             console.warn(`[${APP}] GM_download 失败，退回 <a download>：${filename}`);
             fallback();
@@ -735,6 +844,7 @@
           url,
           name: filename,
           timeout: 0,
+          saveAs: !!settings.saveAs,
           onload: () => resolve(true),
           onerror: (error) => reject(new Error((error && error.error) || "下载失败")),
           ontimeout: () => reject(new Error("下载超时")),
@@ -1148,6 +1258,10 @@
     batchButton.addEventListener("click", () => openDownloadDialog(doc));
     toolbar.appendChild(batchButton);
 
+    const settingsButton = createButton(doc, "下载设置", "cjyk-btn-secondary");
+    settingsButton.addEventListener("click", () => openSettingsPanel(doc));
+    toolbar.appendChild(settingsButton);
+
 
     if (anchor === doc.body) {
       toolbar.style.position = "fixed";
@@ -1178,78 +1292,136 @@
   }
 
   // 在每条课件/视频卡片右侧挂按钮（对应参考项目 ensureActionButton）
-  function mountActionButtons(doc) {
-    const boxes = Array.from(doc.querySelectorAll(".activity-box"));
-    for (const box of boxes) {
-      if (box.querySelector(".cjyk-actions")) continue;
-      const activity = activityDataFor(box);
-      if (!activity || (activity.type !== 2 && activity.type !== 17 && activity.type !== 14)) continue;
-      if (!activity.courseware_id) continue;
+  // 按钮数量受设置控制：full=全部格式/直链，compact=每类一个主按钮，off=不挂
+  function buildCardActions(doc, activity) {
+    const holder = doc.createElement("span");
+    holder.className = "cjyk-actions cjyk-actions-inline";
+    const mode = settings.cardButtons;
+    holder.dataset.mode = mode;
 
-      const host = box.querySelector(".activity__wrap") || box;
-      const holder = doc.createElement("span");
-      holder.className = "cjyk-actions cjyk-actions-inline";
-      holder.dataset.cjykFor = String(activity.courseware_id);
-      holder.dataset.cjykType = String(activity.type);
+    const primaryFormat = settings.pptFormat;
+    const small = "cjyk-btn-small";
+    const secondary = "cjyk-btn-small cjyk-btn-secondary";
 
-      if (activity.type === 14) {
-        // 课堂：上课时投的那套课件（老师另讲的课也在这里）
-        const pdfButton = createButton(doc, "课件PDF", "cjyk-btn-small");
-        pdfButton.addEventListener("click", (event) => {
+    if (activity.type === 14) {
+      // 课堂：上课时投的那套课件 + 那节课的录音
+      if (mode === "compact") {
+        const deckButton = createButton(doc, "课件", small);
+        deckButton.title = `下载课堂课件（${pptFormatLabel(primaryFormat)}）`;
+        deckButton.addEventListener("click", (event) => {
           event.stopPropagation();
-          handleClassPpt(doc, activity, "pdf", pdfButton);
+          handleClassPpt(doc, activity, primaryFormat, deckButton);
         });
-        const zipButton = createButton(doc, "课件ZIP", "cjyk-btn-small cjyk-btn-secondary");
-        zipButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          handleClassPpt(doc, activity, "zip", zipButton);
-        });
-        const pptxButton = createButton(doc, "课件PPTX", "cjyk-btn-small cjyk-btn-secondary");
-        pptxButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          handleClassPpt(doc, activity, "pptx", pptxButton);
-        });
-        const audioButton = createButton(doc, "录音", "cjyk-btn-small cjyk-btn-secondary");
+        const audioButton = createButton(doc, "录音", small);
         audioButton.title = "下载这节课的录音（mp3，不是录屏）";
         audioButton.addEventListener("click", (event) => {
           event.stopPropagation();
           handleClassAudio(doc, activity, audioButton);
         });
-        holder.append(pdfButton, zipButton, pptxButton, audioButton);
-      } else if (activity.type === 2) {
-        const pdfButton = createButton(doc, "PDF", "cjyk-btn-small");
-        pdfButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          handlePpt(doc, activity, "pdf", pdfButton);
-        });
-        const zipButton = createButton(doc, "图片ZIP", "cjyk-btn-small cjyk-btn-secondary");
-        zipButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          handlePpt(doc, activity, "zip", zipButton);
-        });
-        const pptxButton = createButton(doc, "PPTX", "cjyk-btn-small cjyk-btn-secondary");
-        pptxButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          handlePpt(doc, activity, "pptx", pptxButton);
-        });
-        holder.append(pdfButton, zipButton, pptxButton);
-      } else {
-        const videoButton = createButton(doc, "视频", "cjyk-btn-small");
-        videoButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          handleVideo(doc, activity, videoButton);
-        });
-        const linkButton = createButton(doc, "直链", "cjyk-btn-small cjyk-btn-secondary");
-        linkButton.addEventListener("click", (event) => {
-          event.stopPropagation();
-          copyVideoLink(doc, activity);
-        });
-        holder.append(videoButton, linkButton);
+        holder.append(deckButton, audioButton);
+        return holder;
       }
+      const pdfButton = createButton(doc, "课件PDF", small);
+      pdfButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        handleClassPpt(doc, activity, "pdf", pdfButton);
+      });
+      const zipButton = createButton(doc, "课件ZIP", secondary);
+      zipButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        handleClassPpt(doc, activity, "zip", zipButton);
+      });
+      const pptxButton = createButton(doc, "课件PPTX", secondary);
+      pptxButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        handleClassPpt(doc, activity, "pptx", pptxButton);
+      });
+      const audioButton = createButton(doc, "录音", secondary);
+      audioButton.title = "下载这节课的录音（mp3，不是录屏）";
+      audioButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        handleClassAudio(doc, activity, audioButton);
+      });
+      const audioLinkButton = createButton(doc, "录音直链", secondary);
+      audioLinkButton.title = "把录音的签名直链复制到剪贴板";
+      audioLinkButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        copyAudioLink(doc, activity);
+      });
+      holder.append(pdfButton, zipButton, pptxButton, audioButton, audioLinkButton);
+      return holder;
+    }
 
+    if (activity.type === 2) {
+      if (mode === "compact") {
+        const downloadButton = createButton(doc, "下载", small);
+        downloadButton.title = `下载课件（${pptFormatLabel(primaryFormat)}）`;
+        downloadButton.addEventListener("click", (event) => {
+          event.stopPropagation();
+          handlePpt(doc, activity, primaryFormat, downloadButton);
+        });
+        holder.append(downloadButton);
+        return holder;
+      }
+      const pdfButton = createButton(doc, "PDF", small);
+      pdfButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        handlePpt(doc, activity, "pdf", pdfButton);
+      });
+      const zipButton = createButton(doc, "图片ZIP", secondary);
+      zipButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        handlePpt(doc, activity, "zip", zipButton);
+      });
+      const pptxButton = createButton(doc, "PPTX", secondary);
+      pptxButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        handlePpt(doc, activity, "pptx", pptxButton);
+      });
+      holder.append(pdfButton, zipButton, pptxButton);
+      return holder;
+    }
+
+    // 视频
+    const videoButton = createButton(doc, mode === "compact" ? "下载" : "视频", small);
+    videoButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      handleVideo(doc, activity, videoButton);
+    });
+    holder.append(videoButton);
+    if (mode !== "compact") {
+      const linkButton = createButton(doc, "直链", secondary);
+      linkButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        copyVideoLink(doc, activity);
+      });
+      holder.append(linkButton);
+    }
+    return holder;
+  }
+
+  function mountActionButtons(doc) {
+    const boxes = Array.from(doc.querySelectorAll(".activity-box"));
+    const mode = settings.cardButtons;
+    for (const box of boxes) {
+      const existing = box.querySelector(".cjyk-actions");
+      if (mode === "off") {
+        if (existing) existing.remove();
+        continue;
+      }
+      if (existing && existing.dataset.mode === mode) continue;
+      if (existing) existing.remove();
+      const activity = activityDataFor(box);
+      if (!activity || (activity.type !== 2 && activity.type !== 17 && activity.type !== 14)) continue;
+      if (!activity.courseware_id) continue;
+
+      const holder = buildCardActions(doc, activity);
+      holder.dataset.cjykFor = String(activity.courseware_id);
+      holder.dataset.cjykType = String(activity.type);
       // 阻止冒泡，避免触发卡片自身的跳转
       holder.addEventListener("click", (event) => event.stopPropagation());
       holder.addEventListener("mousedown", (event) => event.stopPropagation());
+      const host = box.querySelector(".activity__wrap") || box;
       host.appendChild(holder);
     }
   }
@@ -1610,13 +1782,28 @@
     }
   }
 
+  // 课堂录音的签名直链（OSS，自鉴权，可直接给 aria2c/curl）
+  async function copyAudioLink(doc, activity) {
+    try {
+      const title = (activity.title || "").trim() || "课堂录音";
+      const { audioUrl, durationMs } = await fetchClassReplay(String(activity.courseware_id));
+      if (!audioUrl) throw new Error("这节课没有录音");
+      const minutes = durationMs ? Math.round(durationMs / 60000) : 0;
+      const text = [minutes ? `${title} · 约 ${minutes} 分钟` : title, audioUrl].join("\n");
+      const how = await copyTextToClipboard(doc, text);
+      if (how !== "prompt") showToast(doc, "录音直链已复制到剪贴板", "success");
+    } catch (error) {
+      showToast(doc, `取录音直链失败：${error.message}`, "error", 5000);
+    }
+  }
+
   async function handleVideoList(doc, button) {
     if (state.busy) {
       showToast(doc, "已有任务在进行中", "error");
       return;
     }
     const restore = setButtonBusy(button, "准备中");
-    const panel = createProgressPanel(doc, "视频直链清单");
+    const panel = createProgressPanel(doc, "直链清单");
     const reporter = createProgressReporter(button, panel);
     try {
       let list = [];
@@ -1639,10 +1826,18 @@
         showToast(doc, "本课没有可解析的视频", "error");
         return;
       }
+      const audioItems = classActivities().map((activity) => ({
+        title: (activity.title || "").trim() || "课堂录音",
+        id: String(activity.courseware_id),
+      }));
       const lines = [
-        `# 长江雨课堂 视频直链清单`,
+        `# 长江雨课堂 直链清单`,
         `# classroom_id=${classroomId}  生成时间=${new Date().toLocaleString()}`,
+        `# 视频 ${list.length} 条 · 课堂录音 ${audioItems.length} 条`,
+        `# 课件（PDF/PPTX/图片ZIP）没有直链：它们是页面内存里拼出来的 blob，只能用脚本下载`,
         `# 直链带签名，过期需重新导出；可用 aria2c/curl 下载`,
+        "",
+        `# ---------- 视频 ----------`,
         "",
       ];
       for (let index = 0; index < list.length; index += 1) {
@@ -1659,9 +1854,25 @@
           lines.push(`## ${item.title}`, `# 失败：${error.message}`, "");
         }
       }
+      if (audioItems.length) {
+        lines.push(`# ---------- 课堂录音 ----------`, "");
+        for (let index = 0; index < audioItems.length; index += 1) {
+          const item = audioItems[index];
+          reporter({ stage: `录音 (${index + 1}/${audioItems.length}) ${item.title}`, current: index, total: audioItems.length, detail: "" });
+          try {
+            const { audioUrl, durationMs } = await fetchClassReplay(item.id);
+            if (!audioUrl) throw new Error("这节课没有录音");
+            const minutes = durationMs ? Math.round(durationMs / 60000) : 0;
+            lines.push(`## ${item.title}`, `lesson_id=${item.id}${minutes ? `  duration=${minutes}min` : ""}`, `url=${audioUrl}`, "");
+          } catch (error) {
+            lines.push(`## ${item.title}`, `lesson_id=${item.id}`, `# 失败：${error.message}`, "");
+          }
+        }
+      }
+
       const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
-      triggerBlobDownload(doc, blob, `视频直链_${classroomId}_${timestampName()}.txt`);
-      showToast(doc, "直链清单已导出", "success");
+      triggerBlobDownload(doc, blob, `直链清单_${classroomId}_${timestampName()}.txt`);
+      showToast(doc, `直链清单已导出（视频 ${list.length} · 录音 ${audioItems.length}）`, "success");
       panel.close(4000);
     } catch (error) {
       reporter({ stage: "失败", current: 0, total: 0, detail: error.message });
@@ -1885,6 +2096,196 @@
     delete document.documentElement.dataset.cjykDialog;
   }
 
+  /* ------------------------------------------------------------------ */
+  /* 下载设置面板                                                        */
+  /* ------------------------------------------------------------------ */
+
+  async function clearMetadataCache(doc) {
+    let removed = 0;
+    try {
+      if (typeof GM_listValues === "function" && typeof GM_deleteValue === "function") {
+        const keys = await Promise.resolve(GM_listValues());
+        for (const key of keys || []) {
+          if (typeof key !== "string") continue;
+          if (key.startsWith(`${APP}:detlist:`) || key === `${APP}:chapter`) {
+            await Promise.resolve(GM_deleteValue(key));
+            removed += 1;
+          }
+        }
+      }
+    } catch (error) {
+      return `清空缓存失败：${error.message}`;
+    }
+    // 内存里的章节树/活动列表也一起丢掉，下次扫描重新拉
+    state.chapterLeaves = null;
+    state.chapterMeta = null;
+    state.activities = [];
+    return removed ? `已清空 ${removed} 条缓存（课件详情/章节树）` : "没有可清空的缓存";
+  }
+
+  async function runSelfCheck() {
+    const lines = [];
+    const push = (text) => lines.push(text);
+    push(`脚本版本：${VERSION}`);
+    push(`classroom_id：${classroomId || "未识别"}`);
+    push(`脚本猫 GM_download：${typeof GM_download === "function" ? "可用" : "不可用（大文件会退回内存方式）"}`);
+    push(`GM_xmlhttpRequest：${typeof GM_xmlhttpRequest === "function" ? "可用" : "不可用"}`);
+    push(`设置：${settings.pptFormat.toUpperCase()} · ${kindsLabel(settings.selectedKinds)} · 并发 ${settings.mediaConcurrency} · 卡片按钮 ${settings.cardButtons}`);
+    if (!classroomId) {
+      push("结论：没识别到 classroom_id，页面可能不是课程页");
+      return lines.join("\n");
+    }
+    const probe = async (label, url, pick) => {
+      const started = Date.now();
+      try {
+        const data = await fetchJson(url, { timeout: 15000 });
+        const cost = Date.now() - started;
+        const info = pick(data);
+        push(`${label}：OK ${cost}ms${info ? ` · ${info}` : ""}`);
+      } catch (error) {
+        push(`${label}：失败 ${error.message}`);
+      }
+    };
+    await probe("课程信息", `/v2/api/web/classrooms/${classroomId}?role=5`, (data) => (data.data && data.data.course_name) || "");
+    await probe("学习日志", `/v2/api/web/logs/learn/${classroomId}?actype=-1&page=1&offset=20&sort=-1`, (data) => {
+      const list = (data.data && data.data.activities) || [];
+      const counts = list.reduce((acc, item) => {
+        acc[item.type] = (acc[item.type] || 0) + 1;
+        return acc;
+      }, {});
+      return `活动 ${list.length} 条（PPT ${counts[2] || 0} / 视频 ${counts[17] || 0} / 课堂 ${counts[14] || 0}）`;
+    });
+    await probe("章节树", `/mooc-api/v1/lms/learn/course/chapter?cid=${classroomId}&term=latest&uv_id=3721&classroom_id=${classroomId}`, (data) => {
+      const leaves = [];
+      const walk = (list) => (list || []).forEach((section) => {
+        (section.section_leaf_list || []).forEach((leaf) => leaves.push(leaf));
+        walk(section.section_leaf_list);
+      });
+      walk(data.data && data.data.course_chapter);
+      return `单元 ${leaves.length} 个`;
+    });
+    return lines.join("\n");
+  }
+
+  async function openSettingsPanel(doc) {
+    if (doc.querySelector(".cjyk-set-backdrop")) return;
+    const backdrop = doc.createElement("div");
+    backdrop.className = "cjyk-modal-backdrop cjyk-set-backdrop";
+    const formatOptions = PPT_FORMATS.map((item) => `<option value="${item.id}"${item.id === settings.pptFormat ? " selected" : ""}>${item.label}</option>`).join("");
+    backdrop.innerHTML = `
+      <div class="cjyk-modal cjyk-set-modal" role="dialog" aria-modal="true">
+        <button type="button" class="cjyk-modal-close" aria-label="关闭">×</button>
+        <h3 class="cjyk-modal-title">下载设置</h3>
+        <div class="cjyk-set-body">
+          <div class="cjyk-set-group">
+            <div class="cjyk-set-group-title">默认值（打开「批量下载」时用这些）</div>
+            <label class="cjyk-set-row">默认课件格式
+              <select data-set="pptFormat">${formatOptions}</select>
+            </label>
+            <div class="cjyk-set-row cjyk-set-kinds">默认勾选
+              <label><input type="checkbox" data-set-kind="ppt"${settings.selectedKinds.ppt ? " checked" : ""}> PPT</label>
+              <label><input type="checkbox" data-set-kind="video"${settings.selectedKinds.video ? " checked" : ""}> 视频</label>
+              <label><input type="checkbox" data-set-kind="classppt"${settings.selectedKinds.classppt ? " checked" : ""}> 课堂</label>
+              <label><input type="checkbox" data-set-kind="audio"${settings.selectedKinds.audio ? " checked" : ""}> 录音</label>
+            </div>
+            <div class="cjyk-set-note">在「批量下载」里改只影响那一次，不会写回这里。</div>
+          </div>
+
+          <div class="cjyk-set-group">
+            <div class="cjyk-set-group-title">下载行为</div>
+            <label class="cjyk-set-row"><input type="checkbox" data-set="saveAs"${settings.saveAs ? " checked" : ""}> 下载前询问保存位置</label>
+            <label class="cjyk-set-row">视频/录音同时下载
+              <select data-set="mediaConcurrency">${[1, 2, 3].map((n) => `<option value="${n}"${n === settings.mediaConcurrency ? " selected" : ""}>${n}</option>`).join("")}</select> 个
+            </label>
+          </div>
+
+          <div class="cjyk-set-group">
+            <div class="cjyk-set-group-title">卡片按钮</div>
+            <label class="cjyk-set-row"><input type="radio" name="cjyk-cardmode" value="full"${settings.cardButtons === "full" ? " checked" : ""}> 完整：每种格式一个按钮</label>
+            <label class="cjyk-set-row"><input type="radio" name="cjyk-cardmode" value="compact"${settings.cardButtons === "compact" ? " checked" : ""}> 精简：每类一个按钮，格式跟上面的默认值</label>
+            <label class="cjyk-set-row"><input type="radio" name="cjyk-cardmode" value="off"${settings.cardButtons === "off" ? " checked" : ""}> 关闭：只从「批量下载」里下</label>
+          </div>
+
+          <div class="cjyk-set-group">
+            <div class="cjyk-set-group-title">工具</div>
+            <div class="cjyk-set-actions">
+              <button type="button" class="cjyk-btn cjyk-btn-secondary" data-act="clear">清空缓存</button>
+              <button type="button" class="cjyk-btn cjyk-btn-secondary" data-act="check">接口自检</button>
+              <button type="button" class="cjyk-btn cjyk-btn-secondary" data-act="reset">恢复默认</button>
+            </div>
+            <pre class="cjyk-set-log" data-role="log">设置改完立即生效，存在脚本猫存储里。</pre>
+          </div>
+        </div>
+        <div class="cjyk-modal-footer">
+          <button type="button" class="cjyk-btn" data-act="close">完成</button>
+        </div>
+      </div>`;
+    doc.body.appendChild(backdrop);
+
+    const log = backdrop.querySelector('[data-role="log"]');
+    const writeLog = (text) => { log.textContent = text; };
+    const close = () => backdrop.remove();
+    backdrop.querySelector(".cjyk-modal-close").addEventListener("click", close);
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop) close();
+    });
+    backdrop.querySelectorAll('[data-act="close"]').forEach((button) => button.addEventListener("click", close));
+
+    const remount = () => {
+      Array.from(doc.querySelectorAll(".cjyk-actions")).forEach((node) => node.remove());
+      mountActionButtons(doc);
+    };
+
+    backdrop.querySelector('[data-set="pptFormat"]').addEventListener("change", async (event) => {
+      await saveSettings({ pptFormat: event.target.value });
+      remount();
+      showToast(doc, `默认格式改为 ${pptFormatLabel(settings.pptFormat)}`, "success", 2500);
+    });
+    backdrop.querySelectorAll("[data-set-kind]").forEach((box) => {
+      box.addEventListener("change", async () => {
+        const kinds = { ...settings.selectedKinds };
+        kinds[box.dataset.setKind] = box.checked;
+        await saveSettings({ selectedKinds: kinds });
+        showToast(doc, `默认勾选已更新：${kindsLabel(settings.selectedKinds)}`, "success", 2500);
+      });
+    });
+    backdrop.querySelector('[data-set="saveAs"]').addEventListener("change", async (event) => {
+      await saveSettings({ saveAs: event.target.checked });
+      showToast(doc, event.target.checked ? "下载前会询问保存位置" : "不再询问保存位置", "success", 2500);
+    });
+    backdrop.querySelector('[data-set="mediaConcurrency"]').addEventListener("change", async (event) => {
+      await saveSettings({ mediaConcurrency: Number(event.target.value) });
+      showToast(doc, `同时下载 ${settings.mediaConcurrency} 个`, "success", 2500);
+    });
+    backdrop.querySelectorAll('input[name="cjyk-cardmode"]').forEach((radio) => {
+      radio.addEventListener("change", async () => {
+        if (!radio.checked) return;
+        await saveSettings({ cardButtons: radio.value });
+        remount();
+        showToast(doc, radio.value === "off" ? "卡片按钮已关闭" : `卡片按钮：${radio.value === "full" ? "完整" : "精简"}`, "success", 2500);
+      });
+    });
+
+    backdrop.querySelector('[data-act="clear"]').addEventListener("click", async () => {
+      writeLog("正在清空…");
+      writeLog(await clearMetadataCache(doc));
+    });
+    backdrop.querySelector('[data-act="check"]').addEventListener("click", async () => {
+      writeLog("正在自检…");
+      try {
+        writeLog(await runSelfCheck());
+      } catch (error) {
+        writeLog(`自检失败：${error.message}`);
+      }
+    });
+    backdrop.querySelector('[data-act="reset"]').addEventListener("click", async () => {
+      await saveSettings({ ...DEFAULT_SETTINGS, selectedKinds: { ...DEFAULT_SETTINGS.selectedKinds } });
+      close();
+      remount();
+      showToast(doc, "已恢复默认设置", "success", 2500);
+    });
+  }
+
   let dialogOpening = false;
 
   async function openDownloadDialog(doc) {
@@ -1941,14 +2342,16 @@
           <label title="全部课堂课件"><input type="checkbox" data-role="all-class"> 课堂</label>
           <label title="全部课堂录音"><input type="checkbox" data-role="all-audio"> 录音</label>
           <label class="cjyk-dl-format">PPT 格式
-            <select data-role="format">${PPT_FORMATS.map((item) => `<option value="${item.id}">${item.label}</option>`).join("")}</select>
+            <select data-role="format">${PPT_FORMATS.map((item) => `<option value="${item.id}"${item.id === settings.pptFormat ? " selected" : ""}>${item.label}</option>`).join("")}</select>
           </label>
+          <span class="cjyk-dl-hint" data-role="hint" title="这些默认值来自「下载设置」，在弹窗里改动只影响这一次">默认：${escapeHtml(pptFormatLabel(settings.pptFormat))} · ${escapeHtml(kindsLabel(settings.selectedKinds))}</span>
+          <button type="button" class="cjyk-dl-hint-link" data-role="open-settings">改默认</button>
         </div>
         <div class="cjyk-dl-list">
-          ${sectionHtml("PPT 课件", items.ppts, true)}
-          ${sectionHtml("视频", items.videos, true)}
-          ${sectionHtml("课堂课件（可能与PPT课件重复，默认不勾选）", items.classes, false)}
-          ${sectionHtml("课堂录音（音频，默认不勾选）", items.audios, false)}
+          ${sectionHtml("PPT 课件", items.ppts, settings.selectedKinds.ppt)}
+          ${sectionHtml("视频", items.videos, settings.selectedKinds.video)}
+          ${sectionHtml(settings.selectedKinds.classppt ? "课堂课件（可能与PPT课件重复，默认勾选）" : "课堂课件（可能与PPT课件重复，默认不勾选）", items.classes, settings.selectedKinds.classppt)}
+          ${sectionHtml(settings.selectedKinds.audio ? "课堂录音（音频，默认勾选）" : "课堂录音（音频，默认不勾选）", items.audios, settings.selectedKinds.audio)}
         </div>
         <div class="cjyk-dl-foot">
           <span class="cjyk-dl-summary" data-role="summary">未选择</span>
@@ -2037,6 +2440,13 @@
     backdrop.addEventListener("click", (event) => {
       if (event.target === backdrop) closeDialog(backdrop);
     });
+    const openSettings = backdrop.querySelector('[data-role="open-settings"]');
+    if (openSettings) {
+      openSettings.addEventListener("click", () => {
+        closeDialog(backdrop);
+        openSettingsPanel(doc);
+      });
+    }
     backdrop.querySelector('[data-role="links"]').addEventListener("click", async (event) => {
       closeDialog(backdrop);
       await handleVideoList(doc, event.currentTarget);
@@ -2193,8 +2603,7 @@
         if (ok) showToast(doc, `课件已处理 ${ok}/${deckJobs.length} 个`, "success", 4000);
       }
 
-      for (let index = 0; index < videos.length; index += 1) {
-        const item = videos[index];
+      await runPool(videos, settings.mediaConcurrency, async (item, index) => {
         const stage = `视频 ${index + 1}/${videos.length}：${item.title}`;
         reporter({ stage, current: index, total: videos.length, detail: "解析直链" });
         try {
@@ -2217,11 +2626,10 @@
           reporter({ stage, current: index + 1, total: videos.length, detail: `失败：${error.message}` });
         }
         await sleep(400);
-      }
+      });
 
-      let doneAudios = 0;
-      for (let index = 0; index < audios.length; index += 1) {
-        const item = audios[index];
+      const doneAudios = { count: 0 };
+      await runPool(audios, settings.mediaConcurrency, async (item, index) => {
         const stage = `课堂录音 ${index + 1}/${audios.length}：${item.title}`;
         reporter({ stage, current: index, total: audios.length, detail: "解析音频直链" });
         try {
@@ -2231,20 +2639,20 @@
           const minutes = durationMs ? Math.round(durationMs / 60000) : 0;
           reporter({ stage, current: index, total: audios.length, detail: `${filename}${minutes ? ` · ${minutes} 分钟` : ""}` });
           await downloadVideoFile(audioUrl, filename, 0, null);
-          doneAudios += 1;
+          doneAudios.count += 1;
         } catch (error) {
           reporter({ stage, current: index + 1, total: audios.length, detail: `失败：${error.message}` });
         }
         await sleep(400);
-      }
+      });
 
       reporter({
         stage: "完成",
         current: chosen.length,
         total: chosen.length,
-        detail: `课件 ${deckJobs.length} 个（含课堂 ${classes.length}）· 视频 ${doneVideos}/${videos.length} · 录音 ${doneAudios}/${audios.length}`,
+        detail: `课件 ${deckJobs.length} 个（含课堂 ${classes.length}）· 视频 ${doneVideos}/${videos.length} · 录音 ${doneAudios.count}/${audios.length}`,
       });
-      showToast(doc, `批量下载结束：视频 ${doneVideos}/${videos.length}，录音 ${doneAudios}/${audios.length}`, "success", 6000);
+      showToast(doc, `批量下载结束：视频 ${doneVideos}/${videos.length}，录音 ${doneAudios.count}/${audios.length}`, "success", 6000);
       panel.close(7000);
     } catch (error) {
       reporter({ stage: "失败", current: 0, total: 0, detail: error.message });
@@ -2274,6 +2682,7 @@
 
     injectToolbar(doc);
     observeDocument(doc);
+    loadSettings().then(() => mountActionButtons(doc));
 
     // 页面列表懒加载：滚动/切换标签后补挂按钮
     window.addEventListener("scroll", scheduleMount, { passive: true });
