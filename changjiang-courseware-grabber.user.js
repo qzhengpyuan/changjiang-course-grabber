@@ -44,6 +44,7 @@
  *   - createProgressPanel / createProgressReporter / setButtonBusy / showToast   → 进度与提示
  *   - triggerBlobDownload / makeUniqueFileName / sanitizeFileName / formatBytes  → 下载与命名
  *   - createButton / bindButtonClick / ensureActionButton / styleText            → 工具栏与逐条按钮
+ * 说明：参考项目的运行时导出（storage.json）不随本仓库分发，见 CHANGELOG 2.10.0。
  * 替换掉的模块：
  *   - 学习通章节树解析（coursetree / chapterId / objectId）→ 雨课堂日志接口 /v2/api/web/logs/learn
  *   - PDF 直链下载 → 雨课堂 cards/detlist 幻灯片图 + JPEG 直嵌 PDF 生成
