@@ -3,3 +3,5 @@ __pycache__/
 *.crdownload
 node_modules/
 .venv/
+# 参考项目的运行时备份（含真实课程/名单数据），永不入库
+reference/

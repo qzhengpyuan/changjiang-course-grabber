@@ -1,0 +1,24 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  userscript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 语法检查
+        run: node --check changjiang-courseware-grabber.user.js
+      - name: 元数据与版本一致性
+        run: node dev/check.mjs
+      - name: 敏感文件不允许入库
+        run: |
+          if git ls-files | grep -Ei 'reference/|\.env$|net\.json$|cookies?$'; then
+            echo "发现不应入库的文件"; exit 1
+          fi

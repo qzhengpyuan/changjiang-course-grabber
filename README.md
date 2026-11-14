@@ -66,16 +66,17 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
    - jsDelivr（默认，国内可直连）：<https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/changjiang-courseware-grabber.user.js>
    - GitHub 原始地址（raw，被墙时用不了）：<https://raw.githubusercontent.com/qzhengpyuan/changjiang-course-grabber/main/changjiang-courseware-grabber.user.js>
 
-   > 脚本头部的 `@icon`／`@icon64`／`@updateURL`／`@downloadURL` 都指向 jsDelivr，
-   > 这样国内不挂代理也能显示图标、检查更新。jsDelivr 是 GitHub 仓库的公共 CDN 镜像，
-   > 分支地址有缓存（最长约 12 小时），刚 push 完立刻检查更新可能还拿到旧版；
-   > 等不及就把上面的地址加个查询参数（如 `?v=2`）绕过缓存。
+   > 脚本头部的 `@icon`／`@icon64` 指向 jsDelivr（国内不挂代理也能显示图标）；
+   > `@updateURL`／`@downloadURL` 指向**脚本猫站内**（`scriptcat.org/scripts/code/9063/9063.user.js`），
+   > 由本仓库的推送经脚本猫 webhook 自动同步。jsDelivr 是 GitHub 仓库的公共 CDN 镜像，
+   > 分支地址有缓存（最长约 12 小时），刚 push 完图标可能还停留在旧版；
+   > 等不及就把地址加个查询参数（如 `?v=2`）绕过缓存。
 
 3. 登录长江雨课堂，进入任意课程的学习日志页（`/v2/web/studentLog/<classroom_id>`），
    页面顶部会出现工具栏。
 
-脚本头部已带 `@icon`／`@icon64`（长江雨课堂图标，取自站点 `static/images/logo.png`），
-`@updateURL`／`@downloadURL` 指向本仓库，脚本管理器可自动检查更新。
+脚本头部已带 `@icon`／`@icon64`（长江雨课堂图标，取自站点 `static/images/logo.png`）。
+自动更新走脚本猫站内版本，脚本站显示 2.10.0 时即表示同步完成；GitHub 只作为源码仓库。
 
 ### 权限说明
 
@@ -258,12 +259,11 @@ ZIP 输出就是逐页原图打包，方便单独取图；要整页排好版的�
 ```
 changjiang-course-grabber.user.js   用户脚本本体（单文件）
 assets/                            脚本图标（@icon / @icon64）
-docs/images/v2/                       README 配图
-reference/                         参考项目「学习通 PDF 抓取助手」原始文件
-tools/                             调试与回归测试脚本（CDP 驱动 :99 影子浏览器）
+docs/images/v2/                     README 配图
+dev/                                开发脚手架（CDP 调试与回归测试，不参与脚本运行）
 ```
 
-`tools/` 里的东西只用于开发验证，普通使用不需要：
+`dev/` 里的东西只用于开发验证，普通使用不需要：
 
 - `cdp.py` — 极简 CDP 客户端；`install_script.py` — 把脚本装进影子浏览器的脚本猫
 - `ui_test.py` — 在页面上点按钮、观察进度面板与落盘文件（`scan` / `batch_pdf` / `batch_zip` / `card` / `videolist` / `video`）
@@ -274,7 +274,7 @@ tools/                             调试与回归测试脚本（CDP 驱动 :99 
 
 ## 致谢与许可
 
-- 工具栏、进度面板、提示条、STORE ZIP 写入器等模块复用自「学习通 PDF 抓取助手」（见 `reference/`）。
+- 工具栏、进度面板、提示条、STORE ZIP 写入器等模块改写自参考项目「学习通 PDF 抓取助手」（其源码与本脚本同为 MIT，未随仓库分发）。
 - 图标取自长江雨课堂站点 `static/images/logo.png`，仅用于标识本脚本；与雨课堂官方无隶属关系。
 
 MIT License，见 [LICENSE](LICENSE)。

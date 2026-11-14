@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         长江雨课堂 课件抓取助手
 // @namespace    https://github.com/qzhengpyuan/changjiang-course-grabber
-// @version      2.9.3
+// @version      2.10.0
 // @icon         https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-64.png
 // @icon64       https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-128.png
 // @homepageURL  https://github.com/qzhengpyuan/changjiang-course-grabber
@@ -31,9 +31,10 @@
 // @connect      xuetangx.com
 // @connect      yuketang.cn
 // @connect      changjiang-private-qn.yuketang.cn
-// @connect      aliyuncs.com
 // @connect      yangtse-oplat.oss-cn-beijing.aliyuncs.com
+// @connect      aliyuncs.com
 // @connect      qn-sfe.yuketang.cn
+// @noframes
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -56,8 +57,17 @@
 
   const APP = "cjyk";
   const APP_NAME = "changjiang-courseware-grabber";
-  const VERSION = "2.9.3";
-  const STYLE_VERSION = "2.9.3";
+  // 版本号只有脚本头 @version 一个来源；GM_info 不可用时才退回字面量。
+  const FALLBACK_VERSION = "2.10.0";
+  const VERSION = (() => {
+    try {
+      const meta = typeof GM_info !== "undefined" && GM_info && GM_info.script;
+      return (meta && meta.version) || FALLBACK_VERSION;
+    } catch (error) {
+      return FALLBACK_VERSION;
+    }
+  })();
+  const STYLE_VERSION = VERSION;
 
   const LOG_PAGE_LIMIT = 30;
   const SLIDE_CONCURRENCY = 3;
@@ -133,12 +143,13 @@
 
   // 并发跑一批任务（视频/录音同时下几个由设置决定）
   async function runPool(items, limit, worker) {
-    const queue = items.slice();
+    // 用游标而不是 items.indexOf(item)：列表里有重复项时 indexOf 会全部指向第一个，
+    // 进度、失败重试和文件名序号都会错位。
+    const queue = items.map((item, index) => ({ item, index }));
     const size = Math.max(1, Math.min(limit || 1, queue.length || 1));
     const runners = Array.from({ length: size }, async () => {
       while (queue.length) {
-        const item = queue.shift();
-        const index = items.indexOf(item);
+        const { item, index } = queue.shift();
         try {
           await worker(item, index);
         } catch (error) {
@@ -284,15 +295,21 @@
       .replace(/'/g, "&#39;");
   }
 
+  const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.[^.]*)?$/i;
+
   function sanitizeFileName(value, fallback = "未命名") {
     let name = String(value || "")
       .replace(/[\\/:*?"<>|\r\n\t]/g, "_")
       .replace(/\s+/g, " ")
       .trim()
-      .replace(/^\.+/, "");
+      .replace(/^\.+/, "")
+      .replace(/[. ]+$/, "");
     if (!name) name = fallback;
-    if (name.length > 120) name = name.slice(0, 120);
-    return name;
+    if (WINDOWS_RESERVED.test(name)) name = `_${name}`;
+    const stem = name.replace(/\.[^.]*$/, "");
+    if (WINDOWS_RESERVED.test(stem)) name = `_${name}`;
+    if (name.length > 120) name = name.slice(0, 120).replace(/[. ]+$/, "");
+    return name || fallback;
   }
 
   function formatBytes(bytes) {
@@ -483,8 +500,11 @@
       const pageNumber = pageNumbers[index];
       const contentNumber = pageNumber + 1;
       const imageNumber = pageNumber + 2;
-      const width = Number(pageWidth || page.width || 960);
-      const height = Number(pageHeight || page.height || 720);
+      const width = Number(page.width || pageWidth || 960);
+      const height = Number(page.height || pageHeight || 720);
+      // DCTDecode 直嵌时必须声明与 JPEG 分量一致的色彩空间，否则灰度页会按 RGB 解释成花屏
+      const components = Number(page.components || 3);
+      const colorSpace = components === 1 ? "/DeviceGray" : components === 4 ? "/DeviceCMYK" : "/DeviceRGB";
       const content = `q\n${width.toFixed(2)} 0 0 ${height.toFixed(2)} 0 0 cm\n/Im0 Do\nQ\n`;
 
       addObject(pageNumber, [
@@ -496,8 +516,8 @@
 
       offsets[imageNumber] = offset;
       push(`${imageNumber} 0 obj\n`);
-      push(`<< /Type /XObject /Subtype /Image /Width ${page.width} /Height ${page.height} ` +
-        `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${page.jpeg.byteLength} >>\nstream\n`);
+      push(`<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} ` +
+        `/ColorSpace ${colorSpace} /BitsPerComponent 8 /Filter /DCTDecode /Length ${page.jpeg.byteLength} >>\nstream\n`);
       push(new Uint8Array(page.jpeg));
       push("\nendstream\nendobj\n");
     });
@@ -719,7 +739,12 @@
       if (bytes[index] !== 0xff) { index += 1; continue; }
       const marker = bytes[index + 1];
       if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-        return { height: (bytes[index + 5] << 8) | bytes[index + 6], width: (bytes[index + 7] << 8) | bytes[index + 8] };
+        // SOF: 长度(2) 精度(1) 高(2) 宽(2) 分量数(1)
+        return {
+          height: (bytes[index + 5] << 8) | bytes[index + 6],
+          width: (bytes[index + 7] << 8) | bytes[index + 8],
+          components: bytes[index + 9] || 3,
+        };
       }
       const length = (bytes[index + 2] << 8) | bytes[index + 3];
       if (length < 2) return null;
@@ -863,19 +888,36 @@
   /* ------------------------------------------------------------------ */
 
   async function fetchJson(url, options = {}) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), options.timeout || FETCH_TIMEOUT);
-    try {
-      const response = await fetch(url, {
-        credentials: "include",
-        headers: Object.assign({ xtbz: "ykt" }, options.headers || {}),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status} ${url}`);
-      return await response.json();
-    } finally {
-      clearTimeout(timer);
+    // 整门课批量时接口会偶发 429/5xx 或超时；重试两次的小退避比直接把这一项判死划算。
+    const timeout = options.timeout || FETCH_TIMEOUT;
+    const attempts = Math.max(1, Math.min(3, Number(options.retries) || 3));
+    let lastError = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeout);
+      try {
+        const response = await fetch(url, {
+          credentials: "include",
+          headers: Object.assign({ xtbz: "ykt" }, options.headers || {}),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          const error = new Error(`HTTP ${response.status} ${url}`);
+          error.status = response.status;
+          error.retryable = response.status === 429 || response.status >= 500;
+          throw error;
+        }
+        return await response.json();
+      } catch (error) {
+        lastError = error;
+        const retryable = error && (error.retryable || error.name === "AbortError" || error.name === "TypeError");
+        if (!retryable || attempt === attempts - 1) throw error;
+        await sleep(500 * 2 ** attempt + Math.floor(Math.random() * 250));
+      } finally {
+        clearTimeout(timer);
+      }
     }
+    throw lastError || new Error(`请求失败 ${url}`);
   }
 
   // CDN 返回 Access-Control-Allow-Origin: *，带 cookie 的 fetch 会被浏览器拒绝，
@@ -967,10 +1009,39 @@
     return null;
   }
 
+  const CACHE_MAX_ENTRIES = 300;
+
+  // 每个课件一个 GM 键，长期使用会无限长；超过上限就按写入时间清掉最旧的那批。
+  async function trimCache() {
+    if (typeof GM_listValues !== "function" || typeof GM_deleteValue !== "function") return;
+    try {
+      const keys = (await Promise.resolve(GM_listValues())).filter((key) => String(key).startsWith(`${APP}:detlist:`));
+      if (keys.length <= CACHE_MAX_ENTRIES) return;
+      const stamps = [];
+      for (const key of keys) {
+        const raw = typeof GM_getValue === "function" ? await Promise.resolve(GM_getValue(key)) : null;
+        let ts = 0;
+        try {
+          const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+          ts = (parsed && parsed.ts) || 0;
+        } catch (error) {
+          ts = 0;
+        }
+        stamps.push({ key, ts });
+      }
+      stamps.sort((a, b) => a.ts - b.ts);
+      const overflow = stamps.slice(0, stamps.length - CACHE_MAX_ENTRIES);
+      for (const entry of overflow) await Promise.resolve(GM_deleteValue(entry.key));
+    } catch (error) {
+      /* 清理失败不影响主流程 */
+    }
+  }
+
   async function writeCache(key, data) {
     try {
       if (typeof GM_setValue === "function") {
         await GM_setValue(key, JSON.stringify({ ts: Date.now(), data }));
+        await trimCache();
       }
     } catch (error) {
       /* 忽略缓存错误 */
@@ -1095,8 +1166,8 @@
         const slide = queue.shift();
         try {
           const buffer = await fetchBinary(slide.cover);
-          const size = jpegSize(buffer) || { width: 1280, height: 960 };
-          results.push({ pageIndex: slide.index, buffer, width: size.width, height: size.height });
+          const size = jpegSize(buffer) || { width: 1280, height: 960, components: 3 };
+          results.push({ pageIndex: slide.index, buffer, width: size.width, height: size.height, components: size.components });
         } catch (error) {
           console.warn(`[${APP}] 课堂第 ${slide.index} 页失败`, error);
         }
@@ -1511,8 +1582,8 @@
         const pageIndex = slide.PageIndex || slide.index + 1;
         try {
           const buffer = await fetchBinary(slide.Cover);
-          const size = jpegSize(buffer) || { width: 960, height: 720 };
-          results.push({ pageIndex, buffer, width: size.width, height: size.height });
+          const size = jpegSize(buffer) || { width: 960, height: 720, components: 3 };
+          results.push({ pageIndex, buffer, width: size.width, height: size.height, components: size.components });
         } catch (error) {
           console.warn(`[${APP}] 第 ${pageIndex} 页失败`, error);
         }
@@ -1538,7 +1609,7 @@
       await yieldToBrowser();
       return {
         blob: buildPdfFromJpegs(
-          pages.map((page) => ({ jpeg: page.buffer, width: page.width, height: page.height })),
+          pages.map((page) => ({ jpeg: page.buffer, width: page.width, height: page.height, components: page.components })),
           meta.Width,
           meta.Height
         ),
