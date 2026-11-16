@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         长江雨课堂 课件抓取助手
 // @namespace    https://github.com/qzhengpyuan/changjiang-course-grabber
-// @version      2.10.0
+// @version      2.10.1
 // @icon         https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-64.png
 // @icon64       https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/assets/icon-128.png
 // @homepageURL  https://github.com/qzhengpyuan/changjiang-course-grabber
@@ -17,7 +17,6 @@
 // @tag          视频下载
 // @match        https://changjiang.yuketang.cn/v2/web/studentLog/*
 // @match        https://changjiang.yuketang.cn/ai-workspace/lms-graph/*/video/*
-// @match        https://changjiang.yuketang.cn/pro/lms/*/studycontent*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_download
 // @grant        GM_setValue
@@ -59,7 +58,7 @@
   const APP = "cjyk";
   const APP_NAME = "changjiang-courseware-grabber";
   // 版本号只有脚本头 @version 一个来源；GM_info 不可用时才退回字面量。
-  const FALLBACK_VERSION = "2.10.0";
+  const FALLBACK_VERSION = "2.10.1";
   const VERSION = (() => {
     try {
       const meta = typeof GM_info !== "undefined" && GM_info && GM_info.script;
@@ -828,7 +827,9 @@
   // 大文件不硬来（跨域 a[download] 会被浏览器忽略并直接跳转播放），改为复制直链。
   async function downloadVideoFile(url, filename, size, onProgress) {
     if (typeof GM_download === "function") {
-      return gmDownload(url, filename, onProgress);
+      const stats = await gmDownload(url, filename, onProgress);
+      verifyDownloadSize(stats, size);
+      return true;
     }
     if (size && size > BLOB_FALLBACK_LIMIT) {
       try {
@@ -854,9 +855,28 @@
       loaded += value.length;
       if (typeof onProgress === "function") onProgress({ loaded, total });
     }
+    verifyDownloadSize({ loaded, total }, size, false);
     const blob = new Blob(chunks, { type: "video/mp4" });
     triggerBlobDownload(getDoc(), blob, filename);
     return true;
+  }
+
+  // 连接被服务端提前掐断时，浏览器会把「收到多少」当完成状态，不报错。
+  // 大文件（几百 MB）尤其容易丢尾段，所以落盘后按期望大小复核一次。
+  function verifyDownloadSize(stats, expected, saved) {
+    const got = Number(stats && stats.loaded) || 0;
+    const want = Number(expected) || 0;
+    if (!got || !want) return;
+    // 期望值来自 Content-Range，是同一对象的精确字节数；容差只用来吸收少量协议开销
+    const tolerance = Math.max(4096, want * 0.001);
+    if (Math.abs(got - want) > tolerance) {
+      const hint = saved === false
+        ? "没有落盘，重试一次，或点卡片上的「直链」复制地址交给 aria2c/curl"
+        : "删掉这个文件，点卡片上的「直链」复制地址，用 aria2c -c -x8 -s8 续传";
+      throw new Error(
+        `文件可能不完整：${saved === false ? "只收到" : "下载了"} ${formatBytes(got)}，应为 ${formatBytes(want)}。${hint}`
+      );
+    }
   }
 
   function gmDownload(url, filename, onProgress) {
@@ -865,16 +885,18 @@
         reject(new Error("GM_download 不可用"));
         return;
       }
+      let last = { loaded: 0, total: 0 };
       try {
         GM_download({
           url,
           name: filename,
           timeout: 0,
           saveAs: !!settings.saveAs,
-          onload: () => resolve(true),
+          onload: () => resolve(last),
           onerror: (error) => reject(new Error((error && error.error) || "下载失败")),
           ontimeout: () => reject(new Error("下载超时")),
           onprogress: (progress) => {
+            if (progress) last = { loaded: Number(progress.loaded) || 0, total: Number(progress.total) || 0 };
             if (typeof onProgress === "function") onProgress(progress);
           },
         });
@@ -967,10 +989,7 @@
 
   function detectClassroomId() {
     const match = location.pathname.match(/\/studentLog\/(\d+)/);
-    if (match) return match[1];
-    // 学习内容（/pro/lms/{sign}/{classroom_id}/studycontent）
-    const proMatch = location.pathname.match(/\/pro\/lms\/[^/]+\/(\d+)\/studycontent/);
-    return proMatch ? proMatch[1] : null;
+    return match ? match[1] : null;
   }
 
   async function fetchActivities(onProgress) {
@@ -1429,7 +1448,7 @@
       audioLinkButton.title = "把录音的签名直链复制到剪贴板";
       audioLinkButton.addEventListener("click", (event) => {
         event.stopPropagation();
-        copyAudioLink(doc, activity);
+        copyAudioLink(doc, activity, button);
       });
       holder.append(pdfButton, zipButton, pptxButton, audioButton, audioLinkButton);
       return holder;
@@ -1710,6 +1729,7 @@
       return;
     }
     state.busy = true;
+    let noAudio = false;
     const restore = setButtonBusy(button, "处理中");
     const title = (activity.title || "").trim() || "课堂录音";
     const panel = createProgressPanel(doc, `${title} 录音`);
@@ -1720,13 +1740,14 @@
       if (!audioUrl) throw new Error("这节课没有录音");
       const minutes = durationMs ? Math.round(durationMs / 60000) : 0;
       const filename = `${sanitizeFileName(title)}_录音.mp3`;
+      const expectedSize = await fetchTotalSize(audioUrl);
       reporter({
         stage: "下载录音",
         current: 0,
         total: 0,
-        detail: `${filename}${minutes ? ` · 约 ${minutes} 分钟` : ""}`,
+        detail: `${filename}${minutes ? ` · 课堂 ${minutes} 分钟` : ""}`,
       });
-      await downloadVideoFile(audioUrl, filename, 0, (progress) => {
+      await downloadVideoFile(audioUrl, filename, expectedSize, (progress) => {
         if (!progress) return;
         reporter({
           stage: "下载录音",
@@ -1736,14 +1757,21 @@
         });
       });
       reporter({ stage: "已下载", current: 1, total: 1, detail: filename });
-      showToast(doc, `已下载 ${filename}${minutes ? `（约 ${minutes} 分钟）` : ""}`, "success", 4000);
+      showToast(doc, `已下载 ${filename}`, "success", 4000);
       panel.close(6000);
     } catch (error) {
+      noAudio = /没有录音/.test(error.message);
       reporter({ stage: "失败", current: 0, total: 0, detail: error.message });
       showToast(doc, `失败：${error.message}`, "error", 5000);
     } finally {
       state.busy = false;
       restore();
+      // restore() 会把文案与 disabled 复原，置灰必须在它之后做
+      if (noAudio && button) {
+        button.disabled = true;
+        button.textContent = "无录音";
+        button.title = "这节课没有录音（老师未开启回放）";
+      }
     }
   }
 
@@ -1787,8 +1815,10 @@
       const { info, urls } = await resolveVideoUrls(activity);
       if (!urls.primary) throw new Error("没有可用清晰度");
       const filename = `${sanitizeFileName(info.name || activity.title)}.mp4`;
-      reporter({ stage: "开始下载", current: 0, total: 0, detail: `${filename}（${formatBytes(info.size)}）` });
-      await downloadVideoFile(urls.primary, filename, info.size, (progress) => {
+      const expectedSize = await fetchTotalSize(urls.primary);
+      const sizeLabel = expectedSize ? formatBytes(expectedSize) : info.size ? `约 ${formatBytes(info.size)}` : "";
+      reporter({ stage: "开始下载", current: 0, total: 0, detail: `${filename}${sizeLabel ? `（${sizeLabel}）` : ""}` });
+      await downloadVideoFile(urls.primary, filename, expectedSize, (progress) => {
         reporter({
           stage: "下载视频",
           current: progress.loaded || 0,
@@ -1853,17 +1883,22 @@
   }
 
   // 课堂录音的签名直链（OSS，自鉴权，可直接给 aria2c/curl）
-  async function copyAudioLink(doc, activity) {
+  async function copyAudioLink(doc, activity, button) {
     try {
       const title = (activity.title || "").trim() || "课堂录音";
       const { audioUrl, durationMs } = await fetchClassReplay(String(activity.courseware_id));
       if (!audioUrl) throw new Error("这节课没有录音");
       const minutes = durationMs ? Math.round(durationMs / 60000) : 0;
-      const text = [minutes ? `${title} · 约 ${minutes} 分钟` : title, audioUrl].join("\n");
+      const text = [minutes ? `${title} · 课堂 ${minutes} 分钟` : title, audioUrl].join("\n");
       const how = await copyTextToClipboard(doc, text);
       if (how !== "prompt") showToast(doc, "录音直链已复制到剪贴板", "success");
     } catch (error) {
       showToast(doc, `取录音直链失败：${error.message}`, "error", 5000);
+      if (/没有录音/.test(error.message) && button) {
+        button.disabled = true;
+        button.textContent = "无录音";
+        button.title = "这节课没有录音（老师未开启回放）";
+      }
     }
   }
 
@@ -2022,8 +2057,9 @@
         const urls = await fetchVideoUrls(info.ccid);
         if (!urls.primary) throw new Error("没有可用直链");
         const filename = `${sanitizeFileName(info.name || `视频_${leafId}`)}.mp4`;
-        showToast(doc, `开始下载 ${filename}（${formatBytes(info.size)}）`, "info", 4000);
-        await downloadVideoFile(urls.primary, filename, info.size);
+        const totalSize = await fetchTotalSize(urls.primary);
+        showToast(doc, `开始下载 ${filename}（${totalSize ? formatBytes(totalSize) : `约 ${formatBytes(info.size)}`}）`, "info", 4000);
+        await downloadVideoFile(urls.primary, filename, totalSize);
       } catch (error) {
         showToast(doc, `失败：${error.message}`, "error", 5000);
       } finally {
@@ -2069,6 +2105,29 @@
     });
   }
 
+  // 有些 OSS 对 HEAD 返回 403，用 Range 0-0 读 Content-Range 的总长度更稳
+  // 注意：跨域下 Content-Range 不在 CORS 安全响应头里，被过滤时只能放弃（返回 0），
+  // 绝不能拿 206 的 Content-Length（那是本次返回的 1 个字节）当总大小。
+  async function fetchTotalSize(url) {
+    if (!url) return 0;
+    try {
+      const response = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "omit" });
+      try {
+        if (response.body) response.body.cancel();
+      } catch (error) {
+        // 取消响应体失败无所谓，只是少省一点流量
+      }
+      if (response.status === 206) {
+        const match = /\/(\d+)\s*$/.exec(response.headers.get("content-range") || "");
+        return match ? Number(match[1]) || 0 : 0;
+      }
+      if (!response.ok) return 0;
+      return Number(response.headers.get("content-length")) || 0;
+    } catch (error) {
+      return 0;
+    }
+  }
+
   // 视频真实大小：leaf_info 拿 ccid → playurl 拿直链 → HEAD 取 content-length
   async function resolveVideoSize(leafId) {
     try {
@@ -2076,7 +2135,7 @@
       let size = 0;
       if (info.ccid) {
         const urls = await fetchVideoUrls(info.ccid);
-        if (urls.primary) size = (await fetchHeadSize(urls.primary)) || 0;
+        if (urls.primary) size = (await fetchTotalSize(urls.primary)) || (await fetchHeadSize(urls.primary)) || 0;
       }
       return { size: size || info.size || 0, approx: !size };
     } catch (error) {
@@ -2567,7 +2626,7 @@
             box.checked = false;
           } else if (metaNode) {
             const minutes = durationMs ? Math.round(durationMs / 60000) : 0;
-            metaNode.textContent = minutes ? `${minutes} 分钟` : "录音";
+            metaNode.textContent = minutes ? `课堂 ${minutes} 分钟` : "录音";
           }
           sync();
         } catch (error) {
@@ -2682,13 +2741,20 @@
           const urls = await fetchVideoUrls(info.ccid);
           if (!urls.primary) throw new Error("没有可用直链");
           const filename = makeUniqueFileName(`${sanitizeFileName(info.name || item.title)}.mp4`, used);
-          reporter({ stage, current: index, total: videos.length, detail: `${filename} · ${formatBytes(info.size)}` });
-          await downloadVideoFile(urls.primary, filename, info.size, (progress) => {
+          const totalSize = await fetchTotalSize(urls.primary);
+          const expectedSize = totalSize || 0;
+          reporter({
+            stage,
+            current: index,
+            total: videos.length,
+            detail: `${filename} · ${totalSize ? formatBytes(totalSize) : `约 ${formatBytes(info.size)}`}`,
+          });
+          await downloadVideoFile(urls.primary, filename, expectedSize, (progress) => {
             reporter({
               stage,
               current: index,
               total: videos.length,
-              detail: `${formatBytes(progress && progress.loaded)} / ${formatBytes((progress && progress.total) || info.size)}`,
+              detail: `${formatBytes(progress && progress.loaded)} / ${formatBytes((progress && progress.total) || expectedSize || info.size)}`,
             });
           });
           doneVideos += 1;
@@ -2707,8 +2773,8 @@
           if (!audioUrl) throw new Error("这节课没有录音");
           const filename = makeUniqueFileName(`${sanitizeFileName(item.title)}_录音.mp3`, used);
           const minutes = durationMs ? Math.round(durationMs / 60000) : 0;
-          reporter({ stage, current: index, total: audios.length, detail: `${filename}${minutes ? ` · ${minutes} 分钟` : ""}` });
-          await downloadVideoFile(audioUrl, filename, 0, null);
+          reporter({ stage, current: index, total: audios.length, detail: `${filename}${minutes ? ` · 课堂 ${minutes} 分钟` : ""}` });
+          await downloadVideoFile(audioUrl, filename, (await fetchTotalSize(audioUrl)) || 0, null);
           doneAudios.count += 1;
         } catch (error) {
           reporter({ stage, current: index + 1, total: audios.length, detail: `失败：${error.message}` });
@@ -2738,8 +2804,6 @@
 
   function initDocument(doc) {
     if (doc !== document) return;
-    // 学习内容页常常是学习日志里嵌的 iframe，顶层已经有工具栏，这里不再重复挂
-    if (/\/pro\/lms\/[^/]+\/\d+\/studycontent/.test(location.pathname) && window.top !== window.self) return;
     addStylesOnce(doc);
 
     if (/\/lms-graph\/\d+\/video\//.test(location.pathname)) {

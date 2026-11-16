@@ -31,12 +31,18 @@ function extract(name) {
 
 const WINDOWS_RESERVED = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i;
 const APP = "cjyk-test";
-const body = ["jpegSize", "buildPdfFromJpegs", "sanitizeFileName", "runPool"].map(extract).join("\n");
-const factory = new Function("APP", "WINDOWS_RESERVED", `return (async () => {\n${body}\nreturn { jpegSize, buildPdfFromJpegs, sanitizeFileName, runPool };\n})();`);
+const body = ["jpegSize", "buildPdfFromJpegs", "sanitizeFileName", "runPool", "formatBytes", "verifyDownloadSize"].map(extract).join("\n");
+const factory = new Function("APP", "WINDOWS_RESERVED", `return (async () => {\n${body}\nreturn { jpegSize, buildPdfFromJpegs, sanitizeFileName, runPool, formatBytes, verifyDownloadSize };\n})();`);
 const api = await factory(APP, WINDOWS_RESERVED);
 
-const read = (p) => readFileSync(p);
-const gray = read("/tmp/gray.jpg"), rgb = read("/tmp/rgb.jpg"), cmyk = read("/tmp/cmyk.jpg");
+// 自造最小 JPEG：jpegSize 只需要 SOI + SOF0，PDF 侧也是原样嵌入字节，
+// 所以用分量数不同的合成头就够测，不依赖仓库外的 fixture。
+function fakeJpeg(width, height, components) {
+  const body = [0xff, 0xc0, 0x00, 8 + 3 * components, 8, (height >> 8) & 255, height & 255, (width >> 8) & 255, width & 255, components];
+  for (let i = 0; i < components; i += 1) body.push(i + 1, 0x11, 0);
+  return Buffer.from([0xff, 0xd8, ...body, 0xff, 0xd9]);
+}
+const gray = fakeJpeg(40, 30, 1), rgb = fakeJpeg(40, 30, 3), cmyk = fakeJpeg(40, 30, 4);
 const results = [];
 const ok = (name, cond, extra = "") => results.push([cond ? "PASS" : "FAIL", name, extra]);
 
@@ -69,6 +75,13 @@ await api.runPool(["a", "a", "b", "a"], 2, async (item, index) => {
 });
 ok("runPool: 每项各跑一次", seen.length === 4);
 ok("runPool: 重复项索引正确", JSON.stringify(seen.map((x) => x[1]).sort()) === "[0,1,2,3]", JSON.stringify(seen));
+
+const throws = (fn) => { try { fn(); return false; } catch (e) { return e.message; } };
+ok("verify: 完整通过", throws(() => api.verifyDownloadSize({ loaded: 5049320, total: 5049320 }, 5049320)) === false);
+ok("verify: 缺 9MB 报错", typeof throws(() => api.verifyDownloadSize({ loaded: 274529350, total: 284153243 }, 284153243)) === "string");
+ok("verify: 允许 0.2% 误差", throws(() => api.verifyDownloadSize({ loaded: 284100000, total: 284153243 }, 284153243)) === false);
+ok("verify: 未知期望时跳过", throws(() => api.verifyDownloadSize({ loaded: 123, total: 123 }, 0)) === false);
+ok("formatBytes: 284153243 含 MB", api.formatBytes(284153243).includes("MB"), api.formatBytes(284153243));
 
 for (const [state, name, extra] of results) console.log(`${state}  ${name}${extra ? "  " + extra : ""}`);
 const failed = results.filter((r) => r[0] === "FAIL").length;

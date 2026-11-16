@@ -21,15 +21,15 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 | --- | --- | --- |
 | 顶部工具栏 | 扫描课程 | 拉取课程日志 + 学习内容章节树，统计 PPT / 视频数量（并说明多出来的视频来自哪），把按钮挂到对应卡片上 |
 | 顶部工具栏 | **批量下载** | 弹出勾选面板：列出全部 PPT、视频、课堂课件与课堂录音（视频带真实大小、课堂课件带页数、录音带时长），逐条打勾；勾选初值与格式取自「下载设置」，面板里改动只影响这一次 |
-| 顶部工具栏 | **下载设置** | 持久偏好：默认格式、默认勾选、保存位置询问、视频/录音并发、卡片按钮样式，外加清缓存与接口自检 |
+| 顶部工具栏 | **下载设置** | 持久偏好：默认格式、默认勾选、保存位置询问、视频/录音并发、卡片按钮样式，外加恢复默认、清空缓存与接口自检 |
 | 课件卡片 | 下载 | 单个课件导出，格式跟设置里的默认格式；完整模式下直接把 `PDF` / `图片ZIP` / `PPTX` 三个按钮都放出来 |
-| 课堂卡片 | 下载 | 导出**那节课上课时投出来的课件**（含老师没上传到课程里的课），格式同设置；完整模式下还多 `课件ZIP`/`课件PPTX`/`录音`/`录音直链` |
+| 课堂卡片 | 下载 | 导出**那节课上课时投出来的课件**（含老师没上传到课程里的课），格式同设置；完整模式下五个按钮全平铺：`课件PDF` / `课件ZIP` / `课件PPTX` / `录音` / `录音直链` |
 | 视频卡片 | 下载 | 下载该视频 MP4；完整模式下多一个 `直链` 复制按钮 |
 | 视频页（右下角） | 下载 MP4 | 在学习空间视频页直接下载当前视频 |
 
 批量下载面板长这样（勾选要下的条目，视频行尾是真实文件大小，底部实时汇总已选视频总量；PPT 格式在右上角下拉框里选）：
 
-![批量下载面板](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/v2/dialog-v27.png)
+![批量下载面板](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/v2/dialog-v4.png)
 
 （截图里的课程名与课件名用示例文本替代；`课堂课件` 那一块就是上课时投出来的那套，页数自动补齐，没课件的课会置灰）
 
@@ -45,7 +45,7 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
 
 下载设置面板：
 
-![下载设置](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/v2/settings-panel.png)
+![下载设置](https://cdn.jsdelivr.net/gh/qzhengpyuan/changjiang-course-grabber@main/docs/images/v2/settings-panel-v3.png)
 
 批量任务有进度面板，单个任务成功/失败都会弹提示。
 
@@ -76,14 +76,14 @@ PPT 课件和视频保存到本地：整门课一键导出为 **PDF**、**图片
    页面顶部会出现工具栏。
 
 脚本头部已带 `@icon`／`@icon64`（长江雨课堂图标，取自站点 `static/images/logo.png`）。
-自动更新走脚本猫站内版本，脚本站显示 2.10.0 时即表示同步完成；GitHub 只作为源码仓库。
+自动更新走脚本猫站内版本，脚本站显示 2.10.1 时即表示同步完成；GitHub 只作为源码仓库。
 
 ### 权限说明
 
 脚本会申请：`GM_xmlhttpRequest`（跨域拉幻灯片图）、`GM_download`（批量下载，见下文「为什么批量下载要用 GM_download」）、
-`GM_setValue` / `GM_getValue`（缓存课件元数据）、`GM_addStyle`，以及
+`GM_setValue` / `GM_getValue`（缓存课件元数据；设置项也存这里）、`GM_deleteValue` / `GM_listValues`（「下载设置 → 清空缓存」用）、`GM_addStyle`，以及
 `changjiang.yuketang.cn`、`yangtse-oplat.xuetangx.com`、`ali-cdn.xuetangx.com`、`xuetangx.com`、`yuketang.cn`、
-`changjiang-private-qn.yuketang.cn`、`aliyuncs.com`（课堂课件与课堂录音放在签名 OSS 上，缺这条权限会被脚本猫直接拒绝）的连接权限。
+`changjiang-private-qn.yuketang.cn`、`aliyuncs.com`、`yangtse-oplat.oss-cn-beijing.aliyuncs.com`、`qn-sfe.yuketang.cn`（课堂课件与课堂录音放在签名 OSS 上，缺这条权限会被脚本猫直接拒绝）的连接权限。
 
 ---
 
@@ -191,7 +191,7 @@ PPT 格式在弹窗里选，选中的 PPT 仍然打成一个 ZIP。单课件按�
 因为 PDF / PPTX / ZIP 是脚本**在页面内存里现场拼出来的 Blob**，没有可抓取的 http 地址，
 下载管理器拿到的只是 `blob:...`，它没法自己下载。这是原理限制。
 能交给下载管理器的是**视频**：MP4 是带签名直链的真实 URL，
-用「视频直链清单」导出后粘进下载器即可（直链有有效期，过期重新导出）。
+用「批量下载 → 导出直链」导出后粘进下载器即可（视频和课堂录音都能导；直链自鉴权、可换机器下，但没有明确的过期时间，失效了重新导一次）。
 
 **Q：清晰度还能再高吗？**
 当前拿的就是雨课堂下发给学生的整页渲染图（实测 960×720 / 1280×720 一类），
@@ -200,7 +200,7 @@ PPT 格式在弹窗里选，选中的 PPT 仍然打成一个 ZIP。单课件按�
 **Q：课堂回放（直播回看）能抓吗？**
 看老师开没开。`/api/v3/classroom-report/replay?lesson_id=...` 里 `showPlayback=0`、`record` 为空时，
 `/v2/web/playback/{lesson_id}` 会跳 `/v2/web/forbidden`，学生端没有任何可下载的录屏。
-（同一个接口里 `live[0].url` 是这节课的音频轨道 mp3，能取到，本脚本暂未做下载入口。）
+但同一接口里的 `live[0].url` 是这节课的音频轨道 mp3，脚本能取到并单独下载（见下一节「课堂录音是什么」）。
 
 **Q：「课堂」里上课时投的 PPT 和「PPT 课件」里的是同一份吗？**
 不一定。很多课老师只投不讲义，不上传课件，那这节课的 PPT 就只能在「课堂」里拿到
@@ -209,8 +209,9 @@ PPT 格式在弹窗里选，选中的 PPT 仍然打成一个 ZIP。单课件按�
 
 **Q：课堂录音是什么？能听吗？**
 是那节课回放数据里的音频轨（`replay` 接口的 `live[0].url`，OSS 签名 mp3），
-实测一节课约 90 分钟、90MB 左右，能正常播放；它只是声音，不是上课录屏。
-没有录音源的课（如外请老师那节）会显示「无录音」并置灰。
+它是那节课的**音频轨**，不是上课录屏。两个时长不是一个数：接口里的 `lessonDuration` 是课堂时长（实测某节 89 分钟），
+音频文件本身可能短得多（同一节课只有 18.9 分钟、18MB）。弹窗里写「课堂 N 分钟」指课堂时长，不是音频长度。
+没有录音源的课会显示「无录音」并置灰。
 
 **Q：为什么卡片上只有一个「下载」按钮？想下 PPTX 怎么办？**
 默认是「精简」模式：每张卡片只放一个 `下载`，格式跟设置里的「默认课件格式」走，课堂卡片也不带录音。
@@ -266,9 +267,9 @@ dev/                                开发脚手架（CDP 调试与回归测试�
 `dev/` 里的东西只用于开发验证，普通使用不需要：
 
 - `cdp.py` — 极简 CDP 客户端；`install_script.py` — 把脚本装进影子浏览器的脚本猫
-- `ui_test.py` — 在页面上点按钮、观察进度面板与落盘文件（`scan` / `batch_pdf` / `batch_zip` / `card` / `videolist` / `video`）
-- `batch_fetch.py` — 无头批量跑课件导出（等价于点「批量下载」只勾 PPT、格式选 PDF）
-- `verify_mount.py` — 校验卡片按钮与活动类型是否一一对应
+- `ui_test.py` — 在页面上点按钮、观察进度面板与落盘文件：`scan` / `rows` / `selftest` / `batch pdf|zip|pptx [标题,…]` / `dialogvideo` / `dialogaudio` / `card <标题> <kind>` / `exportlinks`
+- `sniff.py` / `spot.py` / `probe_video.py` — 抓 XHR、定位接口、验证视频直链
+- `check.mjs` / `unit_check.mjs` — 纯 Node 的语法与纯函数单测（CI 也跑这两个）
 
 ---
 
