@@ -281,3 +281,5 @@ dev/                                开发脚手架（CDP 调试与回归测试�
 MIT License，见 [LICENSE](LICENSE)。
 
 <!-- webhook test 2026-11-21 -->
+
+<!-- webhook verify 2 -->
