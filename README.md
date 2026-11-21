@@ -279,3 +279,5 @@ dev/                                开发脚手架（CDP 调试与回归测试�
 - 图标取自长江雨课堂站点 `static/images/logo.png`，仅用于标识本脚本；与雨课堂官方无隶属关系。
 
 MIT License，见 [LICENSE](LICENSE)。
+
+<!-- webhook test 2026-11-21 -->
